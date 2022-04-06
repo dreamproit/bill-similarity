@@ -1,1 +1,1 @@
-# bill_similarity
+# bill-similarity
