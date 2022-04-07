@@ -1,0 +1,8 @@
+fnvhash==0.1.0
+greenlet==1.1.2
+lxml==4.8.0
+numpy==1.22.3
+simhash==2.1.2
+SQLAlchemy==1.4.35
+PyYAML
+mysql-connector-python

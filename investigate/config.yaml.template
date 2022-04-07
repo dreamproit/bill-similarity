@@ -1,0 +1,6 @@
+DB_connection:
+  host: '127.0.0.1:3306'
+  db_name: 'bills'
+  bills_table_name: 'xml_bills'
+  user: ''          # insert your credentials here
+  password: ''      # insert your credentials here
