@@ -5,10 +5,12 @@ When going to production probably we will refactor utils to several modules acco
 
 import os
 import re
+import string
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fnvhash import fnv1a_64
 from simhash import Simhash
+from nltk.tokenize import wordpunct_tokenize
 
 
 # ==================== TEXT UTILS ====================
@@ -28,6 +30,21 @@ def clean_text(text):
     text = re.sub(r'[^\w ]', '', text)
     text = re.sub(' +', ' ', text)
     return text.strip()
+
+
+def text_cleaning(text):
+    """
+    Clean text method
+    """
+    text = str(text).lower()
+    text = re.sub(r'\[.*?\]', '', text)
+    text = re.sub(r'https?://\S+|www\.\S+', '', text)
+    text = re.sub(r'<.*?>+', '', text)
+    text = re.sub(r'[%s]' % re.escape(string.punctuation), '', text)
+    text = re.sub(r'\n', '', text)
+    text = re.sub(r'\w*\d\w*', '', text)
+    return text
+
 
 
 def create_title(text, max_len=250):
@@ -129,3 +146,46 @@ def get_all_file_paths(root_folder, ext):
             filenames += get_all_file_paths(folder, ext)
     return filenames
 
+
+def chunk(iterable, chunk_size=50):
+    """
+    Split iterable to chunks of chunk size
+    [1,2,3,4,5] --> chunk( chunk_size=3) --> [1,2,3], [4,5]
+    :param iterable: any iterable to split
+    :param chunk_size: chunk size
+    :return: generate parts of iterable
+    """
+    i = 0
+    while i <= len(iterable):
+        yield iterable[i:i + chunk_size]
+        i += chunk_size
+
+
+def get_asymmetric_diff(s1, s2):
+    assert isinstance(s1, set), "s1 must be set"
+    assert isinstance(s2, set), "s2 must be set"
+    assert len(s1) != 0, "shouldn't be empty set"
+    return len(s1.intersection(s2)) / len(s1)
+
+
+def test_utils():
+    import random
+
+    s1 = {random.randint(1, 100) for i in range(15)}
+    s2 = {random.randint(1, 20) for i in range(10)}
+
+    diff = get_asymmetric_diff(s1, s2)
+    diff2 = get_asymmetric_diff(s2, s1)
+    print('s1: ', s1)
+    print('s2: ', s2)
+    print('diff s1--s2', diff)
+    print('diff s2--s1', diff2)
+    print('No intersection: ', get_asymmetric_diff({1, 2, 3}, {4, 5, 6}))
+    print('Full intersection: ', get_asymmetric_diff({1, 2, 3}, {1, 2, 3}))
+    print('Full s1 inside s2: ', get_asymmetric_diff({1, 2, 3}, {1, 2, 3, 4, 5, 6}))
+    print('Full s2 inside s1: ', get_asymmetric_diff({1, 2, 3, 4, 5, 6}, {1, 2, 3}))
+    print('Partial s1 inside large s2: ', get_asymmetric_diff({1, 2, 3}, {1, 3, 4, 5, 6, 7, 8}))
+
+
+if __name__ == '__main__':
+    test_utils()

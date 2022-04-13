@@ -1,15 +1,17 @@
 import os
 import re
+import pickle
 from lxml import etree
 from bill import Bill
 from sqlalchemy import text as text_to_query
 from config import CONFIG
 
 # import required utils
-from utils import clean_text, create_title
+from utils import text_cleaning, create_title
 from utils import create_session
 from utils import build_sim_hash
 from utils import get_all_file_paths
+from utils import chunk
 
 
 NAMESPACES = {'uslm': 'http://xml.house.gov/schemas/uslm/1.0'}
@@ -22,7 +24,7 @@ def create_bill_from_dict(element):
     :return: Bill as orm model
     """
     paragraph_text = element.get('text')
-    cleaned = clean_text(paragraph_text)
+    cleaned = text_cleaning(paragraph_text)
     sim_hash = build_sim_hash(cleaned)
     simhash_value = sim_hash.value
     title = create_title(element.get('header', ''))
@@ -149,7 +151,7 @@ def search_similar(session, text=None, hsh=None, n=4):
         if not text:
             print('ERROR, neither hsh, nor text specified')
             return []
-        cleaned = clean_text(text)
+        cleaned = text_cleaning(text)
         hash_to_find = build_sim_hash(cleaned).value
     else:
         hash_to_find = hsh
@@ -172,7 +174,7 @@ def test_search():
     session = create_session(db_config)
     for element in paragraphs:
         paragraph_text = element.get('text')
-        cleaned = clean_text(paragraph_text)
+        cleaned = text_cleaning(paragraph_text)
         sim_hash = build_sim_hash(cleaned)
         simhash_value = sim_hash.value
         found_similar_paragraphs = search_similar(hsh=simhash_value, session=session, n=3)
@@ -184,23 +186,53 @@ def test_search():
                 print('FROM: {}\t\t '.format(sim.origin, sim.paragraph))
 
 
-def test_parse():
+def parse_xml_bill(element):
+    info = dict()
+    for k, v in element.items():
+        info[k] = v
+    info['tag'] = element.tag
+    text = etree.tostring(element, method='text', encoding='unicode').strip()
+    if text:
+        info['text'] = text
+    nested = list()
+    for ch_num, child in enumerate(element.getchildren()):
+        nested.append(parse_xml_bill(child))
+    if nested:
+        info['nested'] = nested
+    return info
+
+
+def test_parse_and_dump():
+    """
+    Function to parse congress bills and dump them with pickle as dictionaries.
+    Each bill is represented as a dictionary with xml data such as text, tag, attributes
+    and nested xml if present.
+    :return:
+    """
     # specify your folder name here:
-    root_folder = '/Users/dmytroustynov/programm/congress/data/'
+    root_folder = '/Users/dmytroustynov/programm/congress/data/117'
     xml_files = get_all_file_paths(root_folder, ext='xml')
-    print('found {} xml-files in {} '.format(len(xml_files), root_folder))
-    counter = 0
-    for xml_path in xml_files[:100]:
-        if not os.path.isfile(xml_path):
-            continue
-        bill_tree = etree.parse(xml_path)
-        sections = bill_tree.xpath('//uslm:section', namespaces=NAMESPACES)
-        if not sections:
-            continue
-        counter += 1
-    print('found {} files with sections'.format(counter))
-    # parsed = [parse_xml_section(sec) for sec in sections]
-    # print('successfully parsed {} xml sections.'.format(len(parsed)))
+    print('Found {} xml-files in {}.'.format(len(xml_files), root_folder))
+    for chunk_number, file_chunk in enumerate(chunk(xml_files, chunk_size=5000)):
+        counter = 0
+        parsed = dict()
+        for xml_path in file_chunk:
+            if not os.path.isfile(xml_path):
+                continue
+            bill_tree = etree.parse(xml_path)
+            xml_bills = bill_tree.xpath('//bill')
+            if not xml_bills:
+                continue
+            for num, xml_bill in enumerate(xml_bills):
+                info = parse_xml_bill(xml_bill)
+                info['origin'] = xml_path
+                parsed[counter] = info
+                counter += 1
+        print('parsed {} files with bills'.format(counter))
+        pkl_file_name = 'bills_{}.pkl'.format(chunk_number + 7)
+        with open(pkl_file_name, 'wb') as pkl:
+            pickle.dump(parsed, pkl)
+        print('successfully serialized {} xml bills to {}.'.format(len(parsed), pkl_file_name))
 
 
 if __name__ == '__main__':
@@ -211,13 +243,12 @@ if __name__ == '__main__':
     # - load to MySQL DB
     # uncomment it once the DB and table was created and connection to it could be established
     # Don`t forget to install mysql-connector-python, if you haven't run `pip install -r requirements.txt` yet
-    parse_and_load()
+    # parse_and_load()
 
     # `test_search` used to search similar paragraphs among stored in DB
     # you can change the file name and try to use another xml
-    test_search()
+    # test_search()
 
     # `test_parse` is a test function that trying to get sections from another set of bills
-    #  looks like we can't parse sections yet.
-    # test_parse()
+    test_parse_and_dump()
     print(' ==== END ==== ')
