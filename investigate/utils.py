@@ -10,7 +10,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fnvhash import fnv1a_64
 from simhash import Simhash
-from nltk.tokenize import wordpunct_tokenize
 
 
 # ==================== TEXT UTILS ====================
@@ -44,7 +43,6 @@ def text_cleaning(text):
     text = re.sub(r'\n', '', text)
     text = re.sub(r'\w*\d\w*', '', text)
     return text
-
 
 
 def create_title(text, max_len=250):

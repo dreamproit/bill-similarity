@@ -183,7 +183,7 @@ def test_search():
             print('ORIGIN: ', paragraph_text)
             for e, sim in enumerate(found_similar_paragraphs):
                 print('SIM {}:\t {}'.format(e, sim.bill_text))
-                print('FROM: {}\t\t '.format(sim.origin, sim.paragraph))
+                print('FROM: {}\t\t {}'.format(sim.origin, sim.paragraph))
 
 
 def parse_xml_bill(element):

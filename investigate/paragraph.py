@@ -74,9 +74,8 @@ class Paragraph:
         for p1, p2 in product(self.get_children(), other.get_children()):
             h1 = p1.hash_value
             h2 = p2.hash_value
-            if h1 and h2:
-                if bin(h1 ^ h2).count('1') < 5:
-                    similars.append((p1.text, p2.text))
+            if h1 and h2 and bin(h1 ^ h2).count('1') < 5:
+                similars.append((p1.text, p2.text))
         return similars
 
     @classmethod
