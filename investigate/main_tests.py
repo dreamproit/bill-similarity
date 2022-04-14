@@ -25,22 +25,22 @@ def create_bill_from_dict(element):
     """
     paragraph_text = element.get('text')
     cleaned = text_cleaning(paragraph_text)
-    sim_hash = build_sim_hash(cleaned)
-    simhash_value = sim_hash.value
+    simhash_text = build_sim_hash(cleaned)
     title = create_title(element.get('header', ''))
     origin = element.get('origin')
     paragraph = element.get('num')
     pagenum = int(element.get('pagenum', 0))
     xml_id = element.get('id')
     bill = Bill(bill_text=paragraph_text,
-                sim_hash=sim_hash.value.to_bytes(64, byteorder='big'),
-                simhash_value=simhash_value,
+                simhash_text=simhash_text.value,
+                simhash_title=simhash_text.value,
                 origin=origin,
                 xml_id=xml_id,
                 pagenum=pagenum,
                 paragraph=paragraph)
     if title:
         bill.title = title
+        bill.simhash_title = build_sim_hash(title).value
     return bill
 
 
@@ -243,12 +243,12 @@ if __name__ == '__main__':
     # - load to MySQL DB
     # uncomment it once the DB and table was created and connection to it could be established
     # Don`t forget to install mysql-connector-python, if you haven't run `pip install -r requirements.txt` yet
-    # parse_and_load()
+    parse_and_load()
 
     # `test_search` used to search similar paragraphs among stored in DB
     # you can change the file name and try to use another xml
     # test_search()
 
     # `test_parse` is a test function that trying to get sections from another set of bills
-    test_parse_and_dump()
+    # test_parse_and_dump()
     print(' ==== END ==== ')

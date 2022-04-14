@@ -45,7 +45,7 @@ def text_cleaning(text):
     return text
 
 
-def create_title(text, max_len=250):
+def create_title(text, max_len=250, ending='...'):
     """
         Cleaning text in title
         :param text: inpt text
@@ -54,7 +54,7 @@ def create_title(text, max_len=250):
         """
     text = re.sub('\n|\r|\t', ' ', text.strip())
     text = re.sub(' +', ' ', text)
-    return '{}{}'.format(text[:max_len], '...' if len(text) > max_len else '')
+    return '{}{}'.format(text[:max_len], ending if len(text) > max_len else '')
 
 
 # ==================== DB UTILS ====================\
