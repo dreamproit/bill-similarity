@@ -1,7 +1,7 @@
 """
 ORM model for bill stored in DB
 """
-from sqlalchemy import Column, Integer, String, Text, BLOB, BIGINT
+from sqlalchemy import Column, Integer, String, Text, BIGINT
 from sqlalchemy.ext.declarative import declarative_base
 from config import CONFIG
 
@@ -20,6 +20,7 @@ class Bill(Base):
     pagenum = Column(Integer)
     paragraph = Column(String(100))
     xml_id = Column(String(50))
+    parent_bill_id = Column(Integer, nullable=True)
 
     def __repr__(self):
         return self.title

@@ -1,6 +1,7 @@
 import os
 import re
 import pickle
+from time import time
 from lxml import etree
 from bill import Bill
 from sqlalchemy import text as text_to_query
@@ -12,6 +13,8 @@ from utils import create_session
 from utils import build_sim_hash
 from utils import get_all_file_paths
 from utils import chunk
+from utils import get_xml_sections
+from utils import create_bill_name
 
 
 NAMESPACES = {'uslm': 'http://xml.house.gov/schemas/uslm/1.0'}
@@ -24,6 +27,8 @@ def create_bill_from_dict(element):
     :return: Bill as orm model
     """
     paragraph_text = element.get('text')
+    if not paragraph_text:
+        return None
     cleaned = text_cleaning(paragraph_text)
     simhash_text = build_sim_hash(cleaned)
     title = create_title(element.get('header', ''))
@@ -36,8 +41,9 @@ def create_bill_from_dict(element):
                 simhash_title=simhash_text.value,
                 origin=origin,
                 xml_id=xml_id,
-                pagenum=pagenum,
-                paragraph=paragraph)
+                pagenum=pagenum)
+    if paragraph:
+        bill.paragraph = paragraph
     if title:
         bill.title = title
         bill.simhash_title = build_sim_hash(title).value
@@ -56,9 +62,8 @@ def parse_xml_section(section):
     for k, v in section.items():
         if k in keys:
             parsed[k] = v
-    _, filename = os.path.split(section.base)
-    if filename:
-        parsed['origin'] = filename
+    filename = create_bill_name(section.base)
+    parsed['origin'] = filename
     _text = etree.tostring(section, method="text", encoding="unicode")
     parsed['text'] = _text
     nested = list()
@@ -67,7 +72,8 @@ def parse_xml_section(section):
             continue
         tag = re.sub('{http://xml.house.gov/schemas/uslm/1.0}', '', child.tag)
         if tag in ('heading', 'header'):
-            parsed['header'] = child.text.strip()
+            header = child.text or etree.tostring(child, method="text", encoding="unicode")
+            parsed['header'] = header.strip()
         if tag in ('num', 'number'):
             parsed['num'] = child.text
         if 'subsection' in child.tag:
@@ -87,8 +93,9 @@ def parse_and_load():
     :return:
     """
     # specify your folder here:
-    samples_folder = '/Users/dmytroustynov/programm/BillMap/xc-nlp-test/samples'
-    scan_folder = os.path.join(samples_folder, 'congress/116')
+    # samples_folder = '/Users/dmytroustynov/programm/BillMap/xc-nlp-test/samples'
+    samples_folder = '/Users/dmytroustynov/programm/congress.nosync/data'
+    scan_folder = os.path.join(samples_folder, '117')
 
     files = get_all_file_paths(scan_folder, ext='xml')
     print('Processing {} files...'.format(len(files)) if files else
@@ -110,8 +117,10 @@ def parse_xml_and_load_to_db(xml_path):
     :param xml_path: path to bill in xml format
     :return: None
     """
-    bill_tree = etree.parse(xml_path)
-    sections = bill_tree.xpath('//uslm:section', namespaces=NAMESPACES)
+    sections = get_xml_sections(xml_path)
+    if not sections:
+        print('!NO SECTIONS in {}'.format(xml_path))
+        return
     parsed = [parse_xml_section(sec) for sec in sections]
     print('-- Successfully parsed {} xml sections.'. format(len(parsed)))
     db_config = CONFIG['DB_connection']
@@ -120,11 +129,18 @@ def parse_xml_and_load_to_db(xml_path):
     nested_bills_counter = 0
     for num, element in enumerate(parsed):
         bill = create_bill_from_dict(element)
+        if not bill:
+            continue
         session.add(bill)
+        session.commit()
         counter += 1
         for nested in element.get('nested', []):
             nested_bill = create_bill_from_dict(nested)
-            nested_bill.paragraph = '{} | {}'.format(bill.paragraph, nested_bill.paragraph)
+            if not nested_bill:
+                continue
+            if bill.paragraph and nested_bill.paragraph:
+                nested_bill.paragraph = '{} | {}'.format(bill.paragraph, nested_bill.paragraph)
+            nested_bill.parent_bill_id = bill.id
             session.add(nested_bill)
             nested_bills_counter += 1
     session.commit()
@@ -235,7 +251,14 @@ def test_parse_and_dump():
         print('successfully serialized {} xml bills to {}.'.format(len(parsed), pkl_file_name))
 
 
+def test_parse():
+    root_folder = '/Users/dmytroustynov/programm/congress.nosync'
+    zip_files = get_all_file_paths(root_folder, ext='zip')
+    print('Found {} zip'.format(len(zip_files)))
+
+
 if __name__ == '__main__':
+    t0 = time()
     print(' ==== START ==== ')
     # `parse_and_load` performs loading entities to DB:
     # - read and parse xml files from `samples/congress` folder
@@ -250,5 +273,6 @@ if __name__ == '__main__':
     # test_search()
 
     # `test_parse` is a test function that trying to get sections from another set of bills
-    # test_parse_and_dump()
+    # test_parse()
     print(' ==== END ==== ')
+    print('took: ', time() - t0)

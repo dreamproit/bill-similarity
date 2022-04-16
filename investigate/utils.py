@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fnvhash import fnv1a_64
 from simhash import Simhash
+from lxml import etree
 
 
 # ==================== TEXT UTILS ====================
@@ -166,7 +167,50 @@ def get_asymmetric_diff(s1, s2):
     return len(s1.intersection(s2)) / len(s1)
 
 
+def create_bill_name(path):
+    path = re.sub(os.environ.get('HOME'), '', path)
+    folders = path.split(os.path.sep)
+    try:
+        congress_number = re.findall(r'\d+', path)[0]
+        name = 'BILLS_' + congress_number
+        if 'bills' in folders:
+            folders.remove('bills')
+        if 'text-versions' in folders:
+            folders.remove('text-versions')
+        name += '_'.join(folders[-4:])
+        return name
+    except:
+        return name + '_'.join(folders)
+
+
+def get_xml_sections(xml_path):
+    namespaces = {'uslm': 'http://xml.house.gov/schemas/uslm/1.0'}
+    bill_tree = etree.parse(xml_path)
+    try:
+        sections = bill_tree.xpath('//uslm:section', namespaces=namespaces) or bill_tree.xpath('//section')
+    except Exception as e:
+        sections = []
+    return sections
+
+
 def test_utils():
+    samples_folder = '/Users/dmytroustynov/programm/BillMap/xc-nlp-test/samples'
+    scan_folder = os.path.join(samples_folder, 'congress/116')
+    files = get_all_file_paths(scan_folder, ext='xml')
+    for filename in files[:20]:
+        sections = get_xml_sections(filename)
+        print('found {} sections in {}'.format(len(sections), filename))
+
+    samples_folder = '/Users/dmytroustynov/programm/congress.nosync/data'
+    scan_folder = os.path.join(samples_folder, '117/bills/hr/hr2471')
+
+    files = get_all_file_paths(scan_folder, ext='xml')
+    for filename in files[:20]:
+        sections = get_xml_sections(filename)
+        print('found {} sections in {}'.format(len(sections), filename))
+
+
+def test_utils_0():
     import random
 
     s1 = {random.randint(1, 100) for i in range(15)}
