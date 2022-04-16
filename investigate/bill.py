@@ -18,7 +18,7 @@ class Bill(Base):
     simhash_title = Column(BIGINT())
     origin = Column(String(255))
     pagenum = Column(Integer)
-    paragraph = Column(String(100))
+    label = Column(String(100))
     xml_id = Column(String(50))
     parent_bill_id = Column(Integer, nullable=True)
 

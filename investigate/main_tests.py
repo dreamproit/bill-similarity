@@ -33,7 +33,7 @@ def create_bill_from_dict(element):
     simhash_text = build_sim_hash(cleaned)
     title = create_title(element.get('header', ''))
     origin = element.get('origin')
-    paragraph = element.get('num')
+    label = element.get('num')
     pagenum = int(element.get('pagenum', 0))
     xml_id = element.get('id')
     bill = Bill(bill_text=paragraph_text,
@@ -42,8 +42,8 @@ def create_bill_from_dict(element):
                 origin=origin,
                 xml_id=xml_id,
                 pagenum=pagenum)
-    if paragraph:
-        bill.paragraph = paragraph
+    if label:
+        bill.label = label
     if title:
         bill.title = title
         bill.simhash_title = build_sim_hash(title).value
@@ -138,8 +138,8 @@ def parse_xml_and_load_to_db(xml_path):
             nested_bill = create_bill_from_dict(nested)
             if not nested_bill:
                 continue
-            if bill.paragraph and nested_bill.paragraph:
-                nested_bill.paragraph = '{} | {}'.format(bill.paragraph, nested_bill.paragraph)
+            if bill.label and nested_bill.label:
+                nested_bill.label = '{} | {}'.format(bill.label, nested_bill.label)
             nested_bill.parent_bill_id = bill.id
             session.add(nested_bill)
             nested_bills_counter += 1
@@ -199,7 +199,7 @@ def test_search():
             print('ORIGIN: ', paragraph_text)
             for e, sim in enumerate(found_similar_paragraphs):
                 print('SIM {}:\t {}'.format(e, sim.bill_text))
-                print('FROM: {}\t\t {}'.format(sim.origin, sim.paragraph))
+                print('FROM: {}\t\t {}'.format(sim.origin, sim.label))
 
 
 def parse_xml_bill(element):
