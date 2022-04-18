@@ -6,6 +6,7 @@ When going to production probably we will refactor utils to several modules acco
 import os
 import re
 import string
+from time import time
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fnvhash import fnv1a_64
@@ -191,6 +192,20 @@ def get_xml_sections(xml_path):
     except Exception as e:
         sections = []
     return sections
+
+
+def timer_wrapper(func):
+    """
+    simple decorator to track time of running func
+    :param func:
+    :return:
+    """
+    def inner_wrapper(*args, **kwargs):
+        t0 = time()
+        res = func(*args, **kwargs)
+        print('\nTOTAL TIME:\t {} sec'.format(round(time() - t0, 3)))
+        return res
+    return inner_wrapper
 
 
 def test_utils():

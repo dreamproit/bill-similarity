@@ -1,15 +1,22 @@
 # python
 import json
 import os
+import pickle
+import subprocess
+from time import time
 from os import path, listdir
 from os.path import isfile, join
 from lxml import etree
 from nltk.tokenize import RegexpTokenizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from config import CONFIG
+from bill import Bill
 
 from utils import text_cleaning
 from utils import get_all_file_paths
+from utils import create_session
+from utils import timer_wrapper
 
 
 # Among the larger bills is samples/congress/116/BILLS-116s1790enr.xml (~ 10MB)
@@ -191,7 +198,74 @@ def main_test():
     print(response)
 
 
+@timer_wrapper
+def create_models():
+    """
+    Create and serialize to .pkl-files count-vectorizer models.
+
+    DOC model - count-vectorizer model with whole bill texts as input text corpus.
+    SECTIONS model - count-vectorizer model with sections texts of the bills as input text corpus.
+
+    For both models text corpora are loaded from DB and cleaned prior to fitting.
+    Models then serialized to pkl files `model_filename` and `sections_model_filename`
+    so you can use them for further processing.
+
+    :return: none
+    """
+    db_config = CONFIG['DB_connection']
+    session = create_session(db_config)
+
+    # ------- BEGIN CREATE DOC MODEL --------
+    text_bills = session.query(Bill).filter(Bill.parent_bill_id == None)
+    doc_corpus = []
+    print('Start loading bills...')
+    t0 = time()
+    for bill in text_bills.all():
+        doc_corpus.append(text_cleaning(bill.bill_text))
+    print('- corpus with {} bills from DB created - OK.'.format(len(doc_corpus)))
+    print('took {} sec'.format(round(time() - t0, 3)))
+    # with open('bill_texts.pkl', 'wb') as pkl:
+    #     pickle.dump(text_corpus, pkl)
+    count_vectorizer = CountVectorizer(ngram_range=(4, 4),
+                                       tokenizer=RegexpTokenizer(r"\w+").tokenize,
+                                       lowercase=True)
+    print('- start fitting model...')
+    t0 = time()
+    count_vectorizer.fit_transform(doc_corpus)
+    print('- model fit - OK.')
+    print('took {} sec'.format(round(time() - t0, 3)))
+    model_filename = 'CV_model.pkl'
+    with open(model_filename, 'wb') as pkl:
+        pickle.dump(count_vectorizer, pkl)
+    res = subprocess.check_output(['du', '-h', model_filename])
+    print('DOC Model saved! Model size: {}'.format(res.decode().split('\t')[0]))
+
+    # ------- BEGIN CREATE SECTIONS MODEL --------
+    text_sections = session.query(Bill).filter(Bill.parent_bill_id!=None)
+    sections_corpus = []
+    print('\nStart loading section texts ...')
+    t0 = time()
+    for bill in text_sections.all():
+        sections_corpus.append(text_cleaning(bill.bill_text))
+    print('- corpus with {} sections from DB created - OK.'.format(len(sections_corpus)))
+    print('took {} sec'.format(round(time() - t0, 3)))
+    count_vectorizer_sections = CountVectorizer(ngram_range=(4, 4),
+                                                tokenizer=RegexpTokenizer(r"\w+").tokenize,
+                                                lowercase=True)
+    print(' - start fitting model...')
+    t0 = time()
+    count_vectorizer_sections.fit_transform(sections_corpus)
+    print(' - model fit - OK')
+    print('took {} sec'.format(round(time() - t0, 3)))
+    sections_model_filename = 'CV_sections_model.pkl'
+    with open(sections_model_filename, 'wb') as pkl:
+        pickle.dump(count_vectorizer_sections, pkl)
+    res = subprocess.check_output(['du', '-h', sections_model_filename])
+    print('SECTIONS Model saved! Model size: {}'.format(res.decode().split('\t')[0]))
+
+
 if __name__ == '__main__':
     print('____ START ____')
-    main_test()
+    # main_test()
+    create_models()
     print('____ END ____')
