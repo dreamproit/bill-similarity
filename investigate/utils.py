@@ -203,7 +203,7 @@ def timer_wrapper(func):
     def inner_wrapper(*args, **kwargs):
         t0 = time()
         res = func(*args, **kwargs)
-        print('\nTOTAL TIME:\t {} sec'.format(round(time() - t0, 3)))
+        print('\n{} TOTAL TIME:\t {} sec'.format(func.__name__, round(time() - t0, 3)))
         return res
     return inner_wrapper
 

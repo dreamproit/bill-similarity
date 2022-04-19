@@ -15,6 +15,7 @@ from utils import get_all_file_paths
 from utils import chunk
 from utils import get_xml_sections
 from utils import create_bill_name
+from utils import timer_wrapper
 
 
 NAMESPACES = {'uslm': 'http://xml.house.gov/schemas/uslm/1.0'}
@@ -83,6 +84,7 @@ def parse_xml_section(section):
     return parsed
 
 
+@timer_wrapper
 def parse_and_load():
     """
     !WARNING there is no protection of uniqueness texts/hashes or any other check
@@ -147,6 +149,7 @@ def parse_xml_and_load_to_db(xml_path):
     print('Added {} texts to db, including {} nested'.format(counter+nested_bills_counter, nested_bills_counter))
 
 
+@timer_wrapper
 def search_similar(session, text=None, hsh=None, n=4):
     """
     Search similar entities in db.
@@ -171,12 +174,107 @@ def search_similar(session, text=None, hsh=None, n=4):
         hash_to_find = build_sim_hash(cleaned).value
     else:
         hash_to_find = hsh
-    sql_template = """SELECT * from {} WHERE BIT_COUNT({} ^ simhash_value) < {}"""
+    print('hash to find: ', hsh)
+    sql_template = """SELECT * from {} WHERE BIT_COUNT({} ^ simhash_text) < {}"""
     query = text_to_query(sql_template.format(db_table_name, hash_to_find, n))
-    return session.query(Bill).from_statement(query).all()
+    return session.query(Bill).from_statement(query).all()\
 
 
+@timer_wrapper
+def search_similar_agg(session, text=None, hsh=None, n=4):
+    """
+    Search similar entities in db.
+    Entities supposed to be similar if they have Hamming distance lower than n (by default 4).
+    Hamming distance counted between `simhash_value` - integers stored in every row,
+    it counted by MYSQL internal function BIT_COUNT of the XOR operation between values stored in db
+    and the hash provided (`hsh` argument).
+    If hsh not provided, we try to count it from `text` provided.
+    At least `hsh` or `text` should be specified
+    :param session: db_session
+    :param text: (optional) text to search
+    :param hsh: (optional) hash value to count Hamming distance
+    :param n: distance between similar entities
+    :return: list of all entities found
+    """
+    db_table_name = CONFIG['DB_connection']['bills_table_name']
+    if not hsh:
+        if not text:
+            print('ERROR, neither hsh, nor text specified')
+            return []
+        cleaned = text_cleaning(text)
+        hash_to_find = build_sim_hash(cleaned).value
+    else:
+        hash_to_find = hsh
+    print('hash to find: ', hsh)
+    sql_template = """
+    SELECT origin, avg(bit_count({hsh} ^ simhash_text)) as avg 
+    from {db_table} WHERE parent_bill_id is NULL and BIT_COUNT({hsh} ^ simhash_text) < {offset} 
+    group by origin
+    """
+    query = text_to_query(sql_template.format(db_table=db_table_name, hsh=hash_to_find, offset=n))
+    return [r.origin for r in session.execute(query)]
+
+
+def find_similar_sections(section, session, n=3, agg=False):
+    info = parse_xml_section(section)
+    paragraph_text = info.get('text')
+    cleaned = text_cleaning(paragraph_text)
+    found_similar = []
+    simhash_value = None
+    search_func = search_similar if not agg else search_similar_agg
+    if cleaned and len(cleaned) > 55:
+        sim_hash = build_sim_hash(cleaned)
+        simhash_value = sim_hash.value
+        found_similar = search_func(hsh=simhash_value, session=session, n=n)
+    # nested = []
+    # for child in section.getchildren():
+    #     nested.append(find_similar_sections(child, session, n))
+    if agg:
+        result = {num: found for num, found in enumerate(found_similar)} if found_similar else None
+    else:
+        result = {num: {'origin': found.origin,
+                        'text': found.bill_text,
+                        'hash': found.simhash_text} for num, found in enumerate(found_similar)} if found_similar else None
+    # if nested:
+    #     result['nested'] = nested
+    if result:
+        result['origin_text'] = paragraph_text
+        result['origin_hash'] = simhash_value
+    return result
+
+
+@timer_wrapper
 def test_search():
+    fn = '../../../congress.nosync/data/117/bills/hr/hr1500/text-versions/eh/document.xml'
+    sections = get_xml_sections(fn)
+    db_config = CONFIG['DB_connection']
+    session = create_session(db_config)
+    found, counter = {}, 0
+    related_bills = dict()
+    related_bills2 = dict()
+    for section in sections:
+        found_similar_sections = find_similar_sections(section, session, n=3)
+        if found_similar_sections:
+            found[counter] = found_similar_sections
+            related_bills[counter] = {s.get('origin') for s in found_similar_sections.values() if isinstance(s, dict)}
+        # nested_found = dict()
+        # for nested_section in section.getchildren():
+        #     nested_found += find_similar_section(nested_section, session, n=3)
+        # if nested_found:
+        #     found['nested_{}'.format(counter)] = nested_found
+        agg_found = find_similar_sections(section, session, n=3, agg=True)
+        if agg_found:
+            related_bills2[counter] = agg_found
+        counter += 1
+    print('recursive search done:')
+
+    _ = [print(r, len(v), v) for r, v in related_bills.items()]
+
+    print('aggregated search: ')
+    _ = [print(r, len(v), v) for r, v in related_bills2.items()]
+
+
+def test_search_old():
     # ! specify your folder name here:
     samples_folder = '/Users/dmytroustynov/programm/BillMap/xc-nlp-test/'
     #  looks like this file has a lot of similar paragraphs with other bills
@@ -258,7 +356,6 @@ def test_parse():
 
 
 if __name__ == '__main__':
-    t0 = time()
     print(' ==== START ==== ')
     # `parse_and_load` performs loading entities to DB:
     # - read and parse xml files from `samples/congress` folder
@@ -266,13 +363,12 @@ if __name__ == '__main__':
     # - load to MySQL DB
     # uncomment it once the DB and table was created and connection to it could be established
     # Don`t forget to install mysql-connector-python, if you haven't run `pip install -r requirements.txt` yet
-    parse_and_load()
+    # parse_and_load()
 
     # `test_search` used to search similar paragraphs among stored in DB
     # you can change the file name and try to use another xml
-    # test_search()
+    test_search()
 
     # `test_parse` is a test function that trying to get sections from another set of bills
     # test_parse()
     print(' ==== END ==== ')
-    print('took: ', time() - t0)
