@@ -1,16 +1,17 @@
 import os
 import re
 import pickle
-from time import time
 from lxml import etree
 from bill import Bill
 from sqlalchemy import text as text_to_query
 from config import CONFIG
+from bs4 import BeautifulSoup
 
 # import required utils
 from utils import text_cleaning, create_title
 from utils import create_session
 from utils import build_sim_hash
+from utils import build_128_simhash
 from utils import get_all_file_paths
 from utils import chunk
 from utils import get_xml_sections
@@ -102,11 +103,70 @@ def parse_and_load():
     files = get_all_file_paths(scan_folder, ext='xml')
     print('Processing {} files...'.format(len(files)) if files else
           'No files found')
+    db_config = CONFIG['DB_connection']
+    session = create_session(db_config)
     for filename in files:
         if not os.path.isfile(filename):
             print('file not found')
             continue
-        parse_xml_and_load_to_db(filename)
+        # parse_xml_and_load_to_db(filename)
+        parse_bill_and_load(filename, session)
+
+
+def get_text(element, sep='\n'):
+    children = element.getchildren()
+    if not children:
+        txt = etree.tostring(element, method='text', encoding='unicode').strip()
+        txt = re.sub(' +', ' ', txt)
+        return re.sub('\n', '', txt)
+    text = ''
+    for child in children:
+        text += get_text(child) + ' '
+    return text + sep
+
+
+def parse_bill_and_load(xml_path, session):
+    """
+    Tool for saving whole bills with their hashes to db
+    :param xml_path:
+    :param session:
+    :return:
+    """
+    sections = get_xml_sections(xml_path)
+    bill_tree = etree.parse(xml_path)
+    if not sections:
+        print('!NO SECTIONS in {}'.format(xml_path))
+        return
+    raw_text = ' '.join([get_text(section) for section in sections])
+    cleaned = text_cleaning(raw_text)
+    bit_simhash_text = build_128_simhash(cleaned)
+    origin = create_bill_name(xml_path)
+    with open(xml_path) as xml:
+        soup = BeautifulSoup(xml)
+    titles = soup.find('dc:title')
+    title = titles.text if titles else ''
+    if not title:
+        xml_titles = bill_tree.xpath('//short-title')
+        title = xml_titles[0].text if xml_titles else ''
+    root = bill_tree.docinfo.root_name
+    resolution = bill_tree.xpath('//{}'.format(root)) or []
+    xml_id = resolution[0].get('dms-id') if resolution else ''
+    meta_info = {k: v for k, v in resolution[0].items()} if resolution else {}
+    bill_date = soup.find('dc:date')
+    if bill_date:
+        meta_info['xml_date'] = bill_date.text
+    bill = Bill(bill_text=raw_text,
+                simhash_text=bit_simhash_text,
+                origin=origin,
+                xml_id=xml_id)
+    if meta_info:
+        bill.meta_info = meta_info
+    if title:
+        bill.title = title
+        bill.simhash_title = re.sub(' ', '0', '{0:64b}'.format(build_sim_hash(title).value))
+    session.add(bill)
+    session.commit()
+    print('created bill, ', bill.id)
 
 
 def parse_xml_and_load_to_db(xml_path):
@@ -177,13 +237,14 @@ def search_similar(session, text=None, hsh=None, n=4):
     print('hash to find: ', hsh)
     sql_template = """SELECT * from {} WHERE BIT_COUNT({} ^ simhash_text) < {}"""
     query = text_to_query(sql_template.format(db_table_name, hash_to_find, n))
-    return session.query(Bill).from_statement(query).all()\
+    return session.query(Bill).from_statement(query).all()
 
 
 @timer_wrapper
-def search_similar_agg(session, text=None, hsh=None, n=4):
+def search_grouped_origins(session, text=None, hsh=None, n=4):
     """
-    Search similar entities in db.
+    Search not repeated origins (filenames) in which most related sections are present.
+    Most related - those which has closer Hamming distance
     Entities supposed to be similar if they have Hamming distance lower than n (by default 4).
     Hamming distance counted between `simhash_value` - integers stored in every row,
     it counted by MYSQL internal function BIT_COUNT of the XOR operation between values stored in db
@@ -207,71 +268,71 @@ def search_similar_agg(session, text=None, hsh=None, n=4):
         hash_to_find = hsh
     print('hash to find: ', hsh)
     sql_template = """
-    SELECT origin, avg(bit_count({hsh} ^ simhash_text)) as avg 
-    from {db_table} WHERE parent_bill_id is NULL and BIT_COUNT({hsh} ^ simhash_text) < {offset} 
-    group by origin
+        SELECT origin, sum(bit_count({hsh} ^ simhash_text)) as sum 
+        from {db_table} WHERE BIT_COUNT({hsh} ^ simhash_text) < {offset} 
+        group by origin 
+        order by sum
     """
     query = text_to_query(sql_template.format(db_table=db_table_name, hsh=hash_to_find, offset=n))
-    return [r.origin for r in session.execute(query)]
+    return {r.origin for r in session.execute(query)}
 
 
-def find_similar_sections(section, session, n=3, agg=False):
-    info = parse_xml_section(section)
-    paragraph_text = info.get('text')
-    cleaned = text_cleaning(paragraph_text)
-    found_similar = []
-    simhash_value = None
-    search_func = search_similar if not agg else search_similar_agg
+def find_related_origins(section, session, n=3):
+    section_text = etree.tostring(section, method="text", encoding="unicode")
+    cleaned = text_cleaning(section_text)
     if cleaned and len(cleaned) > 55:
         sim_hash = build_sim_hash(cleaned)
         simhash_value = sim_hash.value
-        found_similar = search_func(hsh=simhash_value, session=session, n=n)
-    # nested = []
-    # for child in section.getchildren():
-    #     nested.append(find_similar_sections(child, session, n))
-    if agg:
-        result = {num: found for num, found in enumerate(found_similar)} if found_similar else None
-    else:
-        result = {num: {'origin': found.origin,
-                        'text': found.bill_text,
-                        'hash': found.simhash_text} for num, found in enumerate(found_similar)} if found_similar else None
-    # if nested:
-    #     result['nested'] = nested
+        return search_grouped_origins(hsh=simhash_value, session=session, n=n)
+
+
+def find_similar_sections(section, session, n=3, ):
+    section_text = etree.tostring(section, method="text", encoding="unicode")
+    cleaned = text_cleaning(section_text)
+    found_similar = []
+    simhash_value = None
+    if cleaned and len(cleaned) > 55:
+        sim_hash = build_sim_hash(cleaned)
+        simhash_value = sim_hash.value
+        found_similar = search_similar(hsh=simhash_value, session=session, n=n)
+    result = {num: {'origin': found.origin,
+                    'text': found.bill_text,
+                    'hash': found.simhash_text} for num, found in enumerate(found_similar)} if found_similar else None
     if result:
-        result['origin_text'] = paragraph_text
+        result['origin_text'] = section_text
         result['origin_hash'] = simhash_value
     return result
 
 
 @timer_wrapper
 def test_search():
-    fn = '../../../congress.nosync/data/117/bills/hr/hr1500/text-versions/eh/document.xml'
+    fn = '../../../congress.nosync/data/117/bills/hr/hr1500/text-versions/ih/document.xml'
+    # fn = '../../../congress.nosync/data/117/bills/sres/sres323/text-versions/ats/document.xml'
+    # fn = '../../../congress.nosync/data/117/bills/sconres/sconres34/text-versions/is/document.xml'
+    # fn = '../../../congress.nosync/data/117/bills/hr/hr1030/text-versions/ih/document.xml'
+
+    fn = '../../../congress.nosync/data/117/bills/s/s2569/text-versions/is/document.xml'
+    # fn = '../../../congress.nosync/data/117/bills/hr/hr4521/text-versions/eas/document.xml'
     sections = get_xml_sections(fn)
     db_config = CONFIG['DB_connection']
     session = create_session(db_config)
-    found, counter = {}, 0
-    related_bills = dict()
-    related_bills2 = dict()
     for section in sections:
-        found_similar_sections = find_similar_sections(section, session, n=3)
-        if found_similar_sections:
-            found[counter] = found_similar_sections
-            related_bills[counter] = {s.get('origin') for s in found_similar_sections.values() if isinstance(s, dict)}
-        # nested_found = dict()
-        # for nested_section in section.getchildren():
-        #     nested_found += find_similar_section(nested_section, session, n=3)
-        # if nested_found:
-        #     found['nested_{}'.format(counter)] = nested_found
-        agg_found = find_similar_sections(section, session, n=3, agg=True)
-        if agg_found:
-            related_bills2[counter] = agg_found
-        counter += 1
-    print('recursive search done:')
+        headers = section.xpath('header')
+        title = etree.tostring(headers[0], method='text', encoding='unicode') if headers else 'No title found'
 
-    _ = [print(r, len(v), v) for r, v in related_bills.items()]
+        # found_similar_sections = find_similar_sections(section, session, n=3)
+        # if found_similar_sections:
+        #     related_bills = {s.get('origin') for s in found_similar_sections.values() if isinstance(s, dict)}
+        #     print(' section  "{}".'.format(title.strip()))
+        #     print('Found {} related bills:'.format(len(related_bills)))
+        #     print(related_bills)
 
-    print('aggregated search: ')
-    _ = [print(r, len(v), v) for r, v in related_bills2.items()]
+        origins = set(find_related_origins(section, session, n=3))
+        if origins:
+            print(' section  "{}".'.format(title.strip()))
+            print('Found {} related bills:'.format(len(origins)))
+            print(origins)
+        print('-'*55)
 
 
 def test_search_old():
@@ -363,11 +424,11 @@ if __name__ == '__main__':
     # - load to MySQL DB
     # uncomment it once the DB and table was created and connection to it could be established
     # Don`t forget to install mysql-connector-python, if you haven't run `pip install -r requirements.txt` yet
-    # parse_and_load()
+    parse_and_load()
 
     # `test_search` used to search similar paragraphs among stored in DB
     # you can change the file name and try to use another xml
-    test_search()
+    # test_search()
 
     # `test_parse` is a test function that trying to get sections from another set of bills
     # test_parse()

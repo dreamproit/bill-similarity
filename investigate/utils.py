@@ -44,6 +44,7 @@ def text_cleaning(text):
     text = re.sub(r'[%s]' % re.escape(string.punctuation), '', text)
     text = re.sub(r'\n', '', text)
     text = re.sub(r'\w*\d\w*', '', text)
+    text = re.sub(' +', ' ', text)
     return text
 
 
@@ -60,14 +61,16 @@ def create_title(text, max_len=250, ending='...'):
 
 
 # ==================== DB UTILS ====================\
-def _create_db_connection_uri(user, pwd, db_name, host):
-    db_uri_template = 'mysql+mysqlconnector://{user}:{pwd}@{host}/{db_name}' \
-                      '?charset=utf8mb4&auth_plugin=mysql_native_password'
-    db_uri = db_uri_template.format(user=user,
+def _create_db_connection_uri(user, pwd, db_name, host, connector):
+    db_uri_template = '{connector}://{user}:{pwd}@{host}/{db_name}'
+    db_uri = db_uri_template.format(connector=connector,    # 'mysql+mysqlconnector'
+                                    user=user,
                                     pwd=pwd,
                                     host=host,              # '127.0.0.1:3306'
                                     db_name=db_name         # 'billtext'
     )
+    if 'mysql' in connector:
+        db_uri += '?charset=utf8mb4&auth_plugin=mysql_native_password'
     return db_uri
 
 
@@ -84,11 +87,12 @@ def create_session(config):
         passw = config['password']
         db_name = config['db_name']
         host = config['host']
+        connector = config['connector']
     except Exception:
         print('Can`t read configuration from file')
         return None
     db_uri = _create_db_connection_uri(user=user, pwd=passw, db_name=db_name,
-                                      host=host)
+                                       host=host, connector=connector)
     engine = create_engine(db_uri)
     session = sessionmaker(bind=engine, autoflush=False)()
     return session
@@ -113,6 +117,12 @@ def build_sim_hash(data):
         # return sim_obj.value
     except Exception as e:
         print('{}: {}'.format(type(e).__name__, e))
+
+
+def build_128_simhash(data):
+    features = _get_features(data, width=4)
+    sim_obj = Simhash(features, f=128)
+    return re.sub(' ', '0', '{0:128b}'.format(sim_obj.value))
 
 
 # ==================== READING FILES UTILS ====================
@@ -203,7 +213,7 @@ def timer_wrapper(func):
     def inner_wrapper(*args, **kwargs):
         t0 = time()
         res = func(*args, **kwargs)
-        print('\n{} TOTAL TIME:\t {} sec'.format(func.__name__, round(time() - t0, 3)))
+        print('{} TOTAL TIME:\t {} sec\n'.format(func.__name__, round(time() - t0, 3)))
         return res
     return inner_wrapper
 

@@ -8,3 +8,5 @@ PyYAML
 mysql-connector-python
 nltk
 scikit-learn
+psycopg-binary
+beautifulsoup4
