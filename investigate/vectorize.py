@@ -3,6 +3,7 @@ import json
 import os
 import pickle
 import subprocess
+import random
 from time import time
 from os import path, listdir
 from os.path import isfile, join
@@ -262,10 +263,74 @@ def create_models():
         pickle.dump(count_vectorizer_sections, pkl)
     res = subprocess.check_output(['du', '-h', sections_model_filename])
     print('SECTIONS Model saved! Model size: {}'.format(res.decode().split('\t')[0]))
+    # example of output:
+    """
+        ____ START ____
+        Start loading bills...
+        - corpus with 107538 bills from DB created - OK.
+        took 47.901 sec
+        - start fitting model...
+        - model fit - OK.
+        took 77.226 sec
+        DOC Model saved! Model size: 254M
+        
+        Start loading section texts ...
+        - corpus with 180837 sections from DB created - OK.
+        took 39.119 sec
+         - start fitting model...
+         - model fit - OK
+        took 54.672 sec
+        SECTIONS Model saved! Model size: 185M
+        
+        TOTAL TIME:	 226.908 sec
+        ____ END ____
+    """
+
+
+def test_vectorizer():
+    #  ------ GET SOME BILLS FROM DB ------
+    db_config = CONFIG['DB_connection']
+    session = create_session(db_config)
+    bills = [b for b in session.query(Bill).limit(100).all()]
+
+    # ----- DESERILALIZE MODELS -----
+    model_filename = 'CV_model.pkl'
+    with open(model_filename, 'rb') as pkl:
+        doc_count_vectorizer = pickle.load(pkl)
+
+    sections_model_filename = 'CV_sections_model.pkl'
+    with open(sections_model_filename, 'rb') as pkl:
+        sec_count_vectorizer = pickle.load(pkl)
+
+    bill = random.choice(bills)
+    text = bill.bill_text
+    print('selected bill: ', bill.id)
+    print(text)
+    bill_simhash = bill.simhash_text
+    print('selected bill simhash: ', bill_simhash)
+    if bill.parent_bill_id is not None:
+        doc_vectorized = vectorized_transformation([text], doc_count_vectorizer)
+        trans_vocab = {v: k for k, v in doc_count_vectorizer.vocabulary_.items()}
+    else:
+        doc_vectorized = vectorized_transformation([text], sec_count_vectorizer)
+        trans_vocab = {v: k for k, v in sec_count_vectorizer.vocabulary_.items()}
+    print('vectorized - ok')
+    print(doc_vectorized.shape)
+    for ind in doc_vectorized.indices:
+        print('INDEX: ', int(ind))
+        ngram = trans_vocab.get(int(ind))
+        print(ngram)
+        sim_bill = session.query(Bill).filter_by(id=int(ind)).one_or_none()
+        if sim_bill:
+            print('   Bill ID: ', sim_bill.id)
+            print(sim_bill.bill_text)
+            # cnt = str(bill_simhash ^ sim_bill.simhash_text).count('1')
+            print('bit count: ', str(bill_simhash ^ sim_bill.simhash_text).count('1'))
 
 
 if __name__ == '__main__':
     print('____ START ____')
     # main_test()
-    create_models()
+    # create_models()
+    test_vectorizer()
     print('____ END ____')
