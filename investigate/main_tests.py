@@ -17,9 +17,8 @@ from utils import chunk
 from utils import get_xml_sections
 from utils import create_bill_name
 from utils import timer_wrapper
-
-
-NAMESPACES = {'uslm': 'http://xml.house.gov/schemas/uslm/1.0'}
+from utils import clean_bill_text
+from utils import parse_xml_section
 
 
 def create_bill_from_dict(element):
@@ -52,39 +51,6 @@ def create_bill_from_dict(element):
     return bill
 
 
-def parse_xml_section(section):
-    """
-    Convert xml section to dict with keys or further processing
-    :param section: section as xml element
-    :return: dictionary with meta_info
-    """
-    keys = ('id', 'identifier', 'pagenum')
-    parsed = dict()
-    parsed['element'] = section
-    for k, v in section.items():
-        if k in keys:
-            parsed[k] = v
-    filename = create_bill_name(section.base)
-    parsed['origin'] = filename
-    _text = etree.tostring(section, method="text", encoding="unicode")
-    parsed['text'] = _text
-    nested = list()
-    for ch_num, child in enumerate(section.getchildren()):
-        if not isinstance(child.tag, str):
-            continue
-        tag = re.sub('{http://xml.house.gov/schemas/uslm/1.0}', '', child.tag)
-        if tag in ('heading', 'header'):
-            header = child.text or etree.tostring(child, method="text", encoding="unicode")
-            parsed['header'] = header.strip()
-        if tag in ('num', 'number'):
-            parsed['num'] = child.text
-        if 'subsection' in child.tag:
-            nested.append(parse_xml_section(child))
-    if nested:
-        parsed['nested'] = nested
-    return parsed
-
-
 @timer_wrapper
 def parse_and_load():
     """
@@ -113,18 +79,6 @@ def parse_and_load():
         parse_bill_and_load(filename, session)
 
 
-def get_text(element, sep='\n'):
-    children = element.getchildren()
-    if not children:
-        txt = etree.tostring(element, method='text', encoding='unicode').strip()
-        txt = re.sub(' +', ' ', txt)
-        return re.sub('\n', '', txt)
-    text = ''
-    for child in children:
-        text += get_text(child) + ' '
-    return text + sep
-
-
 def parse_bill_and_load(xml_path, session):
     """
     Tool for saving whole bills with their hashes to db
@@ -132,33 +86,32 @@ def parse_bill_and_load(xml_path, session):
     :param session:
     :return:
     """
-    sections = get_xml_sections(xml_path)
-    bill_tree = etree.parse(xml_path)
+    with open(xml_path) as xml:
+        soup = BeautifulSoup(xml, features="xml")
+    sections = list(soup.findAll('section'))
     if not sections:
         print('!NO SECTIONS in {}'.format(xml_path))
         return
-    raw_text = ' '.join([get_text(section) for section in sections])
+    raw_text = clean_bill_text(soup)
     cleaned = text_cleaning(raw_text)
     bit_simhash_text = build_128_simhash(cleaned)
     origin = create_bill_name(xml_path)
-    with open(xml_path) as xml:
-        soup = BeautifulSoup(xml)
-    titles = soup.find('dc:title')
+    titles = soup.find('dc:title') or soup.find('title')
     title = titles.text if titles else ''
-    if not title:
-        xml_titles = bill_tree.xpath('//short-title')
-        title = xml_titles[0].text if xml_titles else ''
-    root = bill_tree.docinfo.root_name
-    resolution = bill_tree.xpath('//{}'.format(root)) or []
-    xml_id = resolution[0].get('dms-id') if resolution else ''
-    meta_info = {k: v for k, v in resolution[0].items()} if resolution else {}
+    if not raw_text:
+        print('-- !! NO text in bill ', xml_path)
+        return
+    res = soup.find('resolution')
+    meta_info = res.attrs if res else dict()
+    xml_id = meta_info.get('dms-id')
     bill_date = soup.find('dc:date')
     if bill_date:
         meta_info['xml_date'] = bill_date.text
     bill = Bill(bill_text=raw_text,
                 simhash_text=bit_simhash_text,
-                origin=origin,
-                xml_id=xml_id)
+                origin=origin)
+    if xml_id:
+        bill.xml_id = xml_id
     if meta_info:
         bill.meta_info = meta_info
     if title:
@@ -210,37 +163,6 @@ def parse_xml_and_load_to_db(xml_path):
 
 
 @timer_wrapper
-def search_similar(session, text=None, hsh=None, n=4):
-    """
-    Search similar entities in db.
-    Entities supposed to be similar if they have Hamming distance lower than n (by default 4).
-    Hamming distance counted between `simhash_value` - integers stored in every row,
-    it counted by MYSQL internal function BIT_COUNT of the XOR operation between values stored in db
-    and the hash provided (`hsh` argument).
-    If hsh not provided, we try to count it from `text` provided.
-    At least `hsh` or `text` should be specified
-    :param session: db_session
-    :param text: (optional) text to search
-    :param hsh: (optional) hash value to count Hamming distance
-    :param n: distance between similar entities
-    :return: list of all entities found
-    """
-    db_table_name = CONFIG['DB_connection']['bills_table_name']
-    if not hsh:
-        if not text:
-            print('ERROR, neither hsh, nor text specified')
-            return []
-        cleaned = text_cleaning(text)
-        hash_to_find = build_sim_hash(cleaned).value
-    else:
-        hash_to_find = hsh
-    print('hash to find: ', hsh)
-    sql_template = """SELECT * from {} WHERE BIT_COUNT({} ^ simhash_text) < {}"""
-    query = text_to_query(sql_template.format(db_table_name, hash_to_find, n))
-    return session.query(Bill).from_statement(query).all()
-
-
-@timer_wrapper
 def search_grouped_origins(session, text=None, hsh=None, n=4):
     """
     Search not repeated origins (filenames) in which most related sections are present.
@@ -286,24 +208,6 @@ def find_related_origins(section, session, n=3):
         return search_grouped_origins(hsh=simhash_value, session=session, n=n)
 
 
-def find_similar_sections(section, session, n=3, ):
-    section_text = etree.tostring(section, method="text", encoding="unicode")
-    cleaned = text_cleaning(section_text)
-    found_similar = []
-    simhash_value = None
-    if cleaned and len(cleaned) > 55:
-        sim_hash = build_sim_hash(cleaned)
-        simhash_value = sim_hash.value
-        found_similar = search_similar(hsh=simhash_value, session=session, n=n)
-    result = {num: {'origin': found.origin,
-                    'text': found.bill_text,
-                    'hash': found.simhash_text} for num, found in enumerate(found_similar)} if found_similar else None
-    if result:
-        result['origin_text'] = section_text
-        result['origin_hash'] = simhash_value
-    return result
-
-
 @timer_wrapper
 def test_search():
     fn = '../../../congress.nosync/data/117/bills/hr/hr1500/text-versions/ih/document.xml'
@@ -319,46 +223,12 @@ def test_search():
     for section in sections:
         headers = section.xpath('header')
         title = etree.tostring(headers[0], method='text', encoding='unicode') if headers else 'No title found'
-
-        # found_similar_sections = find_similar_sections(section, session, n=3)
-        # if found_similar_sections:
-        #     related_bills = {s.get('origin') for s in found_similar_sections.values() if isinstance(s, dict)}
-        #     print(' section  "{}".'.format(title.strip()))
-        #     print('Found {} related bills:'.format(len(related_bills)))
-        #     print(related_bills)
-
         origins = set(find_related_origins(section, session, n=3))
         if origins:
             print(' section  "{}".'.format(title.strip()))
             print('Found {} related bills:'.format(len(origins)))
             print(origins)
         print('-'*55)
-
-
-def test_search_old():
-    # ! specify your folder name here:
-    samples_folder = '/Users/dmytroustynov/programm/BillMap/xc-nlp-test/'
-    #  looks like this file has a lot of similar paragraphs with other bills
-    #  to prove similar search works fine:
-    file_path = 'samples/congress/116/train/BILLS-116hr724enr.xml'
-    bill_path = os.path.join(samples_folder, file_path)
-    bill_tree = etree.parse(bill_path)
-    sections = bill_tree.xpath('//uslm:section', namespaces=NAMESPACES)
-    paragraphs = [parse_xml_section(sec) for sec in sections]
-    db_config = CONFIG['DB_connection']
-    session = create_session(db_config)
-    for element in paragraphs:
-        paragraph_text = element.get('text')
-        cleaned = text_cleaning(paragraph_text)
-        sim_hash = build_sim_hash(cleaned)
-        simhash_value = sim_hash.value
-        found_similar_paragraphs = search_similar(hsh=simhash_value, session=session, n=3)
-        if found_similar_paragraphs:
-            print('\n--- found similar paragraphs: ----')
-            print('ORIGIN: ', paragraph_text)
-            for e, sim in enumerate(found_similar_paragraphs):
-                print('SIM {}:\t {}'.format(e, sim.bill_text))
-                print('FROM: {}\t\t {}'.format(sim.origin, sim.label))
 
 
 def parse_xml_bill(element):
@@ -410,20 +280,13 @@ def test_parse_and_dump():
         print('successfully serialized {} xml bills to {}.'.format(len(parsed), pkl_file_name))
 
 
-def test_parse():
-    root_folder = '/Users/dmytroustynov/programm/congress.nosync'
-    zip_files = get_all_file_paths(root_folder, ext='zip')
-    print('Found {} zip'.format(len(zip_files)))
-
-
 if __name__ == '__main__':
     print(' ==== START ==== ')
     # `parse_and_load` performs loading entities to DB:
     # - read and parse xml files from `samples/congress` folder
     # - split them to sections and count simhash for each section
-    # - load to MySQL DB
+    # - load to PostgreSQL DB
     # uncomment it once the DB and table was created and connection to it could be established
-    # Don`t forget to install mysql-connector-python, if you haven't run `pip install -r requirements.txt` yet
     parse_and_load()
 
     # `test_search` used to search similar paragraphs among stored in DB

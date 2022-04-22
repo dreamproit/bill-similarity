@@ -7,6 +7,7 @@ import os
 import re
 import string
 from time import time
+from bs4.element import Tag
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fnvhash import fnv1a_64
@@ -58,6 +59,79 @@ def create_title(text, max_len=250, ending='...'):
     text = re.sub('\n|\r|\t', ' ', text.strip())
     text = re.sub(' +', ' ', text)
     return '{}{}'.format(text[:max_len], ending if len(text) > max_len else '')
+
+
+def _get_text(element, sep='\n'):
+    """
+    recursive parsing and cleaning of text from beatiful soup elements
+    :param element: bs4.element.Tag
+    :param sep: separotor between elements
+    :return:
+    """
+    children = []
+    if isinstance(element, Tag):
+        children = list(element.children)
+    if not children:
+        txt = element.getText().strip()
+        txt = re.sub(' +', ' ', txt)
+        return re.sub('\n', '', txt)
+    text = ''
+    for child in children:
+        text += _get_text(child, sep) + ' '
+    if element.name == 'header':
+        # better to separate text if it's a header
+        sep = '\n'
+    return text + sep if text else ''
+
+
+def clean_bill_text(soup):
+    """
+    Create clean text from beautifulsoup element.
+    :param soup:
+    :return:
+    """
+    sections = soup.findAll('section')
+    raw_text = '\n'.join([_get_text(section, sep=' ') for section in sections])
+    if not re.sub('\n+', '', raw_text):
+        raw_text = soup.text
+    raw_text = re.sub(' +', ' ', raw_text)
+    raw_text = re.sub(' \.', '.', raw_text)
+    raw_text = re.sub('\n ?', '\n', raw_text)
+    raw_text = re.sub('\n+', '\n', raw_text).strip()
+    return raw_text
+
+
+def parse_xml_section(section):
+    """
+    Convert xml section to dict with keys or further processing
+    :param section: section as xml element
+    :return: dictionary with meta_info
+    """
+    keys = ('id', 'identifier', 'pagenum')
+    parsed = dict()
+    parsed['element'] = section
+    for k, v in section.items():
+        if k in keys:
+            parsed[k] = v
+    filename = create_bill_name(section.base)
+    parsed['origin'] = filename
+    _text = etree.tostring(section, method="text", encoding="unicode")
+    parsed['text'] = _text
+    nested = list()
+    for ch_num, child in enumerate(section.getchildren()):
+        if not isinstance(child.tag, str):
+            continue
+        tag = re.sub('{http://xml.house.gov/schemas/uslm/1.0}', '', child.tag)
+        if tag in ('heading', 'header'):
+            header = child.text or etree.tostring(child, method="text", encoding="unicode")
+            parsed['header'] = header.strip()
+        if tag in ('num', 'number'):
+            parsed['num'] = child.text
+        if 'subsection' in child.tag:
+            nested.append(parse_xml_section(child))
+    if nested:
+        parsed['nested'] = nested
+    return parsed
 
 
 # ==================== DB UTILS ====================\
