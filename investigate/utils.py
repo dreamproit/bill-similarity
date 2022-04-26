@@ -7,6 +7,7 @@ import os
 import re
 import string
 from time import time
+from hashlib import sha3_512
 from bs4.element import Tag
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -197,6 +198,16 @@ def build_128_simhash(data):
     features = _get_features(data, width=4)
     sim_obj = Simhash(features, f=128)
     return re.sub(' ', '0', '{0:128b}'.format(sim_obj.value))
+
+
+def build_512_simhash(data):
+    features = _get_features(data, width=4)
+    sim_obj = Simhash(features, f=512, hashfunc=_512_hash_func)
+    return re.sub(' ', '0', '{0:512b}'.format(sim_obj.value))
+
+
+def _512_hash_func(x):
+    return sha3_512(x).digest()
 
 
 # ==================== READING FILES UTILS ====================

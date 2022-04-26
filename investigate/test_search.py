@@ -39,40 +39,53 @@ def find_similar_sections(section, session, n=3, ):
 
 
 @timer_wrapper
-def search_similar_by_text(session, text=None, text_hash=None, n=6, verbose=False):
+def search_similar_by_text(session, text=None, text_hash=None, bill_id=None, n=6, verbose=False):
     """
-    Search similar entities in db by text.
+        Search similar entities in db by text.
     PostgreSQL syntax used here.
     Entities supposed to be similar if they have Hamming distance lower than n (by default 4).
     Hamming distance counted between `simhash_value` - integers stored in every row,
     it counted by MYSQL internal function BIT_COUNT of the XOR operation between values stored in db
     and the hash provided (`text_hash` argument).
     If hsh not provided, we try to count it from `text` provided.
-    At least `hsh` or `text` should be specified
+    At least `hsh`, `text` or `bill_id` should be specified
     :param session: db_session
     :param text: (optional) text to search
     :param text_hash: (optional) bit string to count Hamming distance
-    :param n: distance between similar entities
     :return: list of all entities found
+    :param bill_id: (optional) if provided, then search all bills, that has similar texts to Bill with this bill_id
+    :param n: distance between similar entities
+    :param verbose: to print results or not. set to True - for debug
+    :return: list of matching bills
     """
     db_table_name = CONFIG['DB_connection']['bills_table_name']
-    if not text_hash:
-        if not text:
-            if verbose:
-                print('ERROR, neither hsh, nor text specified')
-            return []
-        cleaned = text_cleaning(text)
-        hash_to_find = build_128_simhash(cleaned)
+    if bill_id is None:
+        if not text_hash:
+            if not text:
+                if verbose:
+                    print('ERROR, neither hsh, nor text specified')
+                return []
+            cleaned = text_cleaning(text)
+            hash_to_find = build_128_simhash(cleaned)
+        else:
+            hash_to_find = text_hash
+        if verbose:
+            print('hash to find: ', hash_to_find)
+        sql_template = "SELECT * FROM {db_table} " \
+                       "WHERE bit_count(simhash_text # b'{hash_to_find}') < {n}"
+        query = text_to_query(sql_template.format(db_table=db_table_name,
+                                                  hash_to_find=hash_to_find,
+                                                  n=n))
     else:
-        hash_to_find = text_hash
-    if verbose:
-        print('hash to find: ', hash_to_find)
-    sql_template = """
-    SELECT * FROM {db_table} 
-    WHERE bit_count(simhash_text # b'{hash_to_find}') < {n}"""
-    query = text_to_query(sql_template.format(db_table=db_table_name,
-                                              hash_to_find=hash_to_find,
-                                              n=n))
+        sql_template = "WITH found_bill AS (" \
+                       " SELECT simhash_text from {db_table}" \
+                       " WHERE id={bill_id}" \
+                       ")" \
+                       " SELECT * FROM {db_table} " \
+                       " WHERE bit_count(simhash_text # (SELECT simhash_text from found_bill)) < {n}"
+        query = text_to_query(sql_template.format(db_table=db_table_name,
+                                                  bill_id=bill_id,
+                                                  n=n))
     return session.query(Bill).from_statement(query).all()
 
 
