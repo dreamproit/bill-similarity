@@ -536,4 +536,22 @@ Next what we will possibly need is to create partial indexes to speed up queries
 
 Also, we possibly will need to think about length of n-grams. Now I'm trying to create 8-gram. If ngram was not generated it will generate smaller one and down to 1-gram.
 that's because titles can be small
-for bills we possibly won't need 1-grams
+for bills we possibly won't need 1-gram.
+
+== Useful links ==
+
+* https://ismailyenigul.medium.com/pg-prewarm-extention-to-pre-warming-the-buffer-cache-in-postgresql-7e033b9a386d
+
+* https://www.postgresql.org/docs/9.0/pgtrgm.html
+
+* https://stackoverflow.com/questions/53600144/how-to-migrate-an-existing-postgres-table-to-partitioned-table-as-transparently
+
+* https://www.alibabacloud.com/blog/optimizations-with-full-text-search-in-postgresql_595339
+
+* https://www.postgresql.org/docs/14/textsearch-controls.html#TEXTSEARCH-RANKING
+
+* https://www.postgresql.org/docs/current/using-explain.html
+
+* https://www.postgresql.org/docs/current/parallel-query.html
+
+* https://wiki.postgresql.org/wiki/FAQ#What_is_the_maximum_size_for_a_row.2C_a_table.2C_and_a_database.3F
