@@ -17,7 +17,7 @@ The step-by-step data pipeline is as follows:
 - Store the documents in Elasticsearch (bill text and bill sections)
 - Analyze similarity between bills
 - Get newly loaded bills from databsase
-- Compare bills using https://github.com/aih/billsim[billsim] GO package
+- Compare bills using https://github.com/aih/bills[bills] GO package
 * For each bill, get the documents from Elasticsearch using MLT (More Like This) query
 - Store the results in a database
 
