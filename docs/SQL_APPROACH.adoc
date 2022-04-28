@@ -1,15 +1,14 @@
 :toc:
 
 
-== Base data pipeline and storage ==
+== Current data pipeline and storage ==
 
 All meta information is stored in a database.
 But the document texts are stored in the Elasticsearch.
-It's described in the following diagram:
+The current architecture is described in the following diagram:
 https://github.com/arachnidllc/BillMap/blob/main/architecture.jpg[here]
 
-Firstly we get data from congress.gov.
-Analyse data step by step:
+The step-by-step data pipeline is as follows:
 
 - Get the data from congress.gov.
 - Write bill ids and bill titles to a database.
@@ -17,7 +16,7 @@ Analyse data step by step:
 - Analyze related bills
 - Store the documents in Elasticsearch (bill text and bill sections)
 - Analyze similarity between bills
-- Get newly loaded bills from Databsase
+- Get newly loaded bills from databsase
 - Compare bills using https://github.com/aih/billsim[billsim] GO package
 * For each bill, get the documents from Elasticsearch using MLT (More Like This) query
 - Store the results in a database
@@ -40,10 +39,10 @@ image::bills-analysis.png[Bills length analysis, width=640]
 
 You can see that this approach depends on the text length.
 
-We have found a way how to improve the performance of the query using <<Sim-Hash approach>>. Basically it will make search for similar documents operation complexity linear, and it will depend only on documents count, not depending on the text length.
+We have found a way to improve the performance of the query using <<Sim-Hash approach>>. Basically it will make search for similar documents operation complexity linear, and it will depend only on documents count, not depending on the text length.
 
 
-== Needed indexes explanation ==
+== Indexes for Similarity ==
 
 The main trick here is to build correct indexes.
 
@@ -76,7 +75,7 @@ CREATE INDEX id_title_trgm_title_ts_idx ON btiapp_billstagetitle
 
 === Composing BTREE + GIST ===
 
-To mix GIST index with BTREE we are usin https://www.postgresql.org/docs/14/btree-gist.html[btree_gist] extension.
+To mix GIST index with BTREE we are using https://www.postgresql.org/docs/14/btree-gist.html[btree_gist] extension.
 
 [source,sql]
 ----
@@ -90,9 +89,9 @@ CREATE INDEX id_title_gist_title_ts_idx ON btiapp_billstagetitle
 ----
 
 
-=== Create function to calculate n-grams
+=== Calculate n-grams
 
-To generate n-grams we can use `nltk` package (and in that case we will need to calculate them before loading them into the DB). I also implemented it in pure SQL (with words normalisation, without stop words and so on):
+To generate n-grams we can use the `nltk` Python package. To do that, we would calculate n-grams before loading into the DB. As an alternative, the n-gram can be calculated in pure SQL, with word normalisation, without stop words, etc.:
 
 [source,sql]
 ----
@@ -152,17 +151,17 @@ Result:
 
 Where:
 
-* n-grams are separated by `&nbsp;|&nbsp;` symbol (logical operator `OR`)
+* n-grams are separated by the `&nbsp;|&nbsp;` symbol (logical `OR` operator)
 * words are normalised
 * `<n>`  - how many words were between words before https://en.wikipedia.org/wiki/Stemming[stemming]
 * < - > means that words should be linked (actually means that it's n-gram)
 * it's standard PostgreSQL full text search query mechanism and it is described here: https://www.postgresql.org/docs/9.6/static/textsearch-controls.html[here]
 
-== Basic query explanation ==
+== Similarity SQL query ==
 
 This query does the following:
 
-* Builds a matrix of full union of all documents to all documents
+* Builds a matrix of a full union of all documents to all documents
 
 * Apply pre-filter by trigram similarity (each trigram consists of 3 chars)
 
@@ -207,7 +206,7 @@ WHERE true
     )
 ----
 
-This actually makes cartesian product of all titles filtered in 2 (might be useful to apply one more additional filter) stages (trigrams and full text search).
+This calculates the cartesian product of all titles filtered in 2 stages. It might be useful to apply one more additional filter, trigrams and full text search.
 
 Where:
 
@@ -218,8 +217,8 @@ Where:
 lt.title % rt.title
 ----
 
-Under the hood of postgresql operator `%` is a bitwise operator.
-It checks n-grams similarity with threshold 0.3 (threshold can be changed easily)
+Under the hood, the PostgreSQL operator `%` is a bitwise operator.
+It checks the similarity of n-grams with threshold 0.3 (threshold can be changed easily)
 
 * 1.a `possible` stage to filter more precisely (not tested well yet by me, but IMO it should help):
 
@@ -243,7 +242,7 @@ and (
 
 The next stage is to calculate the score of the match.
 
-Basically it can be achieved by calculating the number of intersected n-grams between texts divided by the length of n-grams of what item we compare.
+Basically it can be achieved by calculating the number of intersected n-grams between texts, divided by the number of n-grams in each of the texts we compare.
 
 [source,math]
 ----
@@ -268,7 +267,7 @@ ts_rank_cd(
 )              AS rtl_rank
 -------
 
-Function `ts_rank_cd` is a Postgres FTS function that calculates the rank (score) of found text against to the query. It has this notation:
+The `ts_rank_cd` Postgres FTS function calculates the rank (score) of found text against query. It has this notation:
 
 [source,pseudocode]
 ----
@@ -318,7 +317,7 @@ offset_num as (select 0 as n),
 ----
 
 === Query ===
-Here is the code needed to be executed in psql console (command by command):
+Here is the code needed to be executed in the psql console (command by command):
 
 [source,sql]
 ----
@@ -590,10 +589,10 @@ from (
 ----
 
 == Sim-Hash approach ==
-=== Brief ===
-Calculation of similarity hashes widely used by Google and other search engines to compare any type of information (text, images, sounds, etc.)
+=== Summary ===
+Calculation of similarity hashes is widely used by Google and other search engines to compare any type of information (text, images, sounds, etc.)
 
-The SimHash algorithm is a locality-sensitive hashing algorithm. Locality-sensitive simply means that instead of the algorithm being sensitive to variations in the input stream like a cryptographic hashing algorithm, it ignores variations (to a degree) and groups similar content together. Similar input strings will get similar or even the same hashes.
+The SimHash algorithm is a locality-sensitive hashing algorithm. Locality-sensitive means that instead of the algorithm being sensitive to variations in the input stream like a cryptographic hashing algorithm, it ignores variations (to a degree) and groups similar content together. Similar input strings will get similar or even the same hashes.
 
 SimHash works by breaking the input string into k-grams and producing a fixed-sized shingle for each k-gram. This algorithm under the hood convert every k-gram to integer with simple arithmetic and bit operations and has an integer number as a result. It works pretty fast in terms of machine operations.
 
