@@ -23,7 +23,7 @@ The step-by-step data pipeline is as follows:
 
 = Pure SQL based approach to find similar documents =
 
-== Current approach performance analysis
+== SQL-based approach performance analysis
 
 The whole query with comments is stored in https://docs.google.com/spreadsheets/d/1-VYuSP9_2-dkRCVffQX9rpJp5jELUL6DiACZ2RKIMYk/edit?usp=sharing[google sheet]. It's also exported as pdf files and located in the `/docs` folder.
 
