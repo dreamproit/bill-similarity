@@ -116,10 +116,14 @@ def parse_bill_and_load(xml_path, session):
         bill.meta_info = meta_info
     if title:
         bill.title = title
-        bill.simhash_title = re.sub(' ', '0', '{0:64b}'.format(build_sim_hash(title).value))
+        bill.simhash_title = build_128_simhash(text_cleaning(title))
     session.add(bill)
     session.commit()
-    print('created bill, ', bill.id)
+    if len(title) > 1000:
+        msg = f'WARNING! LARGE TITLE: {bill.id}'
+    else:
+        msg = f'created bill, {bill.id}'
+    print(msg)
 
 
 def parse_xml_and_load_to_db(xml_path):

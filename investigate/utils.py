@@ -3,15 +3,20 @@ All required util functions are here just to keep them in one place.
 When going to production probably we will refactor utils to several modules according to their purposes.
 """
 
+# LARGE prime numbers for better performing fnv-1a hash function in 128bit
+# see: https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function#FNV_hash_parameters
+FNV_128_PRIME = 0x1000000000000000000013b
+FNV1_128A_INIT = 0x6c62272e07bb014262b821756295c58d
+
+
 import os
 import re
 import string
 from time import time
-from hashlib import sha3_512
 from bs4.element import Tag
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from fnvhash import fnv1a_64
+from fnvhash import fnv1a_64, fnva
 from simhash import Simhash
 from lxml import etree
 
@@ -174,7 +179,15 @@ def create_session(config):
 
 
 # ==================== SIM HASH UTILS ====================
-def _get_features(text, width=3):
+def _get_ngrams(text, width=3):
+    """
+    Creates ngrams from text with `width`:
+    _get_features('some text', 3)
+    >>> ['som', 'ome', 'met', 'ete', 'tex', 'ext']
+    :param text:
+    :param width:
+    :return:
+    """
     text = str(text or '').strip().lower()
     if not text:
         return list()
@@ -184,30 +197,58 @@ def _get_features(text, width=3):
     return [text[i:i + width] for i in range(max(len(text) - width + 1, 1))]
 
 
-def build_sim_hash(data):
-    try:
-        s_features = _get_features(text=data)
-        sim_obj = Simhash(s_features, hashfunc=fnv1a_64)
-        return sim_obj
-        # return sim_obj.value
-    except Exception as e:
-        print('{}: {}'.format(type(e).__name__, e))
+def _get_features(text, width=4):
+    """
+    Create shingles of `width` words from text:
+    _get_features('Lorem ipsum dolor sit amet, consectetur adipiscing elit.', 3)
+    >>> ['lorem ipsum dolor', 'ipsum dolor sit', 'dolor sit amet',
+        'sit amet consectetur', 'amet consectetur adipiscing', 'consectetur adipiscing elit']
+    :param text:
+    :param n:
+    :return:
+    """
+    if not text:
+        return []
+    text = text.lower()
+    # replace all none alphanumeric characters with spaces
+    text = re.sub(r'[^a-zA-Z0-9\s]', ' ', text)
+    # break sentence in the token, remove empty tokens
+    tokens = [token for token in text.split(' ') if token != '']
+    ngrams = zip(*[tokens[i:] for i in range(width)])
+    return [' '.join(ngram) for ngram in ngrams]
 
 
-def build_128_simhash(data):
-    features = _get_features(data, width=4)
-    sim_obj = Simhash(features, f=128)
+def fnv1a_128(data, hval_init=FNV1_128A_INIT):
+    """
+    Returns the 128 bit FNV-1a hash value for the given data.
+    """
+    return fnva(data, hval_init, FNV_128_PRIME, 2**128)
+
+
+def build_sim_hash(data, n=4):
+    """
+    Builds a hash - a 64 bit string of the input data using SimHash algorithm
+    hashfunc - fnv-1a hashing for 64 bit
+    :param data: imput data to hash
+    :param n: parameter for ngram
+    :return: bit string 64 characters long
+    """
+    features = _get_ngrams(text=data, width=n)
+    sim_obj = Simhash(features, hashfunc=fnv1a_64)
+    return re.sub(' ', '0', '{0:64b}'.format(sim_obj.value))
+
+
+def build_128_simhash(data, n=6):
+    """
+    Builds a hash - a 128 bit string of the input data using SimHash algorithm
+    hashfunc - fnv-1a hashing for 128 bit
+    :param data: input data to hash
+    :param n: parameter for ngram
+    :return: bit string 128 characters long
+    """
+    features = _get_ngrams(data, width=n)
+    sim_obj = Simhash(features, f=128, hashfunc=fnv1a_128)
     return re.sub(' ', '0', '{0:128b}'.format(sim_obj.value))
-
-
-def build_512_simhash(data):
-    features = _get_features(data, width=4)
-    sim_obj = Simhash(features, f=512, hashfunc=_512_hash_func)
-    return re.sub(' ', '0', '{0:512b}'.format(sim_obj.value))
-
-
-def _512_hash_func(x):
-    return sha3_512(x).digest()
 
 
 # ==================== READING FILES UTILS ====================
