@@ -43,9 +43,9 @@ link:Pairwise-Comparison-Explanation-Titles-Statistic-Performance.pdf[Performanc
 
 This image shows dependency of text length and the speed of the query.
 
-image::tetles-search-graph.png[width=640]
+image::image-2022-04-28-20-06-02-300.png[width=640]
 
-Here's the distribution of text length among the bills.
+Here's the text length distribution among the bills.
 
 image::bills-analysis.png[Bills length analysis, width=640]
 
