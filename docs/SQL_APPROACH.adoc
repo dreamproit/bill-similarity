@@ -23,6 +23,18 @@ The step-by-step data pipeline is as follows:
 
 = Pure SQL based approach to find similar documents =
 
+== SQL-based similarity pipeline summary ==
+
+Similarity is calculated in a 4-step process:
+
+* Build a matrix of a full union of all documents to all documents
+
+* Apply pre-filter by trigram similarity (each trigram consists of 3 chars)
+
+* Apply post-filter by trigram similarity (each trigram consists of  [8->1] words build as ts_query)
+
+* Calculate rank of each found pair of documents from left to right and from right to left
+
 == SQL-based approach performance analysis
 
 The whole query with comments is stored in https://docs.google.com/spreadsheets/d/1-VYuSP9_2-dkRCVffQX9rpJp5jELUL6DiACZ2RKIMYk/edit?usp=sharing[google sheet]. It's also exported as pdf files and located in the `/docs` folder.
@@ -157,17 +169,6 @@ Where:
 * < - > means that words should be linked (actually means that it's n-gram)
 * it's standard PostgreSQL full text search query mechanism and it is described here: https://www.postgresql.org/docs/9.6/static/textsearch-controls.html[here]
 
-== Similarity SQL query ==
-
-This query does the following:
-
-* Builds a matrix of a full union of all documents to all documents
-
-* Apply pre-filter by trigram similarity (each trigram consists of 3 chars)
-
-* Apply post-filter by trigram similarity (each trigram consists of  [8->1] words build as ts_query)
-
-* Calculate rank of each found pair of documents from left to right and from right to left
 
 == Query vs Indexes ==
 
