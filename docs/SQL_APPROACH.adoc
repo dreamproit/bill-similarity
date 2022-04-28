@@ -3,7 +3,7 @@
 
 == Base data pipeline and storage ==
 
-Фll meta information is stored in a database.
+All meta information is stored in a database.
 But the document texts are stored in the Elasticsearch.
 It's described in the following diagram:
 https://github.com/arachnidllc/BillMap/blob/main/architecture.jpg[here]
