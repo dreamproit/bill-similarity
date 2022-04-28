@@ -33,7 +33,7 @@ Similarity is calculated in a 4-step process:
 
 * Apply post-filter by trigram similarity (each trigram consists of  [8->1] words build as ts_query)
 
-* Calculate rank of each found pair of documents from left to right and from right to left
+* Calculate the normalized score (0-1) of each found pair of documents from left to right and from right to left
 
 == SQL-based approach performance analysis
 
@@ -170,7 +170,7 @@ Where:
 * it's standard PostgreSQL full text search query mechanism and it is described here: https://www.postgresql.org/docs/9.6/static/textsearch-controls.html[here]
 
 
-== Query vs Indexes ==
+== Query Indexes ==
 
 We need these fields to be stored in the indexes:
 
@@ -243,7 +243,7 @@ and (
 
 The next stage is to calculate the score of the match.
 
-Basically it can be achieved by calculating the number of intersected n-grams between texts, divided by the number of n-grams in each of the texts we compare.
+This is achieved by calculating the number of intersected n-grams between texts, divided by the number of n-grams in each of the texts we compare. The resulting score is between 0-1, because the numerator is, at most, equal to the total number of n-grams in the smallest of the documents.
 
 [source,math]
 ----
