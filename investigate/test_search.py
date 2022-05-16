@@ -43,7 +43,7 @@ def search_similar_by_text(session, text=None, text_hash=None, bill_id=None, n=6
     """
         Search similar entities in db by text.
     PostgreSQL syntax used here.
-    Entities supposed to be similar if they have Hamming distance lower than n (by default 4).
+    Entities supposed to be similar if they have Hamming distance lower than n.
     Hamming distance counted between `simhash_value` - integers stored in every row,
     it counted by MYSQL internal function BIT_COUNT of the XOR operation between values stored in db
     and the hash provided (`text_hash` argument).
@@ -78,7 +78,7 @@ def search_similar_by_text(session, text=None, text_hash=None, bill_id=None, n=6
                                                   n=n))
     else:
         sql_template = "WITH found_bill AS (" \
-                       " SELECT simhash_text from {db_table}" \
+                       " SELECT simhash_title from {db_table}" \
                        " WHERE id={bill_id}" \
                        ")" \
                        " SELECT * FROM {db_table} " \
@@ -94,7 +94,7 @@ def search_similar_by_title(session, title=None, title_hash=None, n=4, verbose=F
     """
     Search similar entities in db by title.
     PostgreSQL syntax used here.
-    Entities supposed to be similar if they have Hamming distance lower than n (by default 4).
+    Entities supposed to be similar if they have Hamming distance lower than n.
     Hamming distance counted between `simhash_value` - integers stored in every row,
     it counted by MYSQL internal function BIT_COUNT of the XOR operation between values stored in db
     and the hash provided (`hsh` argument).
@@ -113,7 +113,8 @@ def search_similar_by_title(session, title=None, title_hash=None, n=4, verbose=F
                 print('ERROR, neither hash, nor title specified')
             return []
         # cleaned = text_cleaning(title)
-        hash_to_find = re.sub(' ', '0', '{0:64b}'.format(build_sim_hash(title).value))
+        hash_to_find = build_128_simhash(title)
+        # hash_to_find = build_sim_hash(title)
     else:
         hash_to_find = title_hash
     if verbose:
@@ -204,7 +205,7 @@ def test_search():
             soup = BeautifulSoup(xml, features="xml")
         # sections = list(soup.findAll('section'))
         raw_text = clean_bill_text(soup)
-        found = search_similar_by_text(session, text=raw_text, verbose=True)
+        found = search_similar_by_text(session, text=raw_text, n=14, verbose=True)
         if found:
             print(f'For xml {xml_file} "{raw_text[:55]}..."')
             print(f'found {len(found)} similar entities')
@@ -217,11 +218,13 @@ def test_search():
         'Advisory Committee Freely Associated States, and for other purposes.',
         'Providing for congressional disapproval of the proposed foreign military sale to the '
         'Kingdom of Saudi Arabia of certain defense articles.',
-
+        'Authorizing the use of the Capitol Grounds for the National Peace Officers Memorial Service',
+        'Authorizing the use of the Capitol Grounds for the National Honor Guard and Pipe Band Exhibition.',
+        'Authorizing the use of the Capitol Grounds for the National Peace Officers Memorial Service and Pipe Band Exhibition.',
     ]
     for title in titles:
         # cleaned = text_cleaning(title)
-        found_titles = search_similar_by_title(session, title=title, verbose=True)
+        found_titles = search_similar_by_title(session, title=title, n=8, verbose=True)
         if not found_titles:
             print(f'NOT FOUND similar for {title}')
             continue
@@ -232,5 +235,22 @@ def test_search():
         print('-'*50)
 
 
+@timer_wrapper
+def update_hashes_script():
+    db_config = CONFIG['DB_connection']
+    session = create_session(db_config)
+    for num, bill in enumerate(session.query(Bill).all()):
+        # simhash_text = build_128_simhash(text_cleaning(bill.bill_text))
+        simhash_title = build_sim_hash(bill.title)
+        # bill.simhash_text = simhash_text
+        bill.hash_title64 = simhash_title
+        session.add(bill)
+        # print(f'Updated {bill.id}')
+        if num % 100 == 0:
+            session.commit()
+            print(num)
+
+
 if __name__ == '__main__':
     test_search()
+    # update_hashes_script()

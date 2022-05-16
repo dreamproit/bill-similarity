@@ -1,15 +1,16 @@
+import sys
 import os
 import re
 import pickle
 from lxml import etree
-from bill import Bill
+from bill import Bill, Section, Base, BillPath
 from sqlalchemy import text as text_to_query
 from config import CONFIG
 from bs4 import BeautifulSoup
 
 # import required utils
 from utils import text_cleaning, create_title
-from utils import create_session
+from utils import create_session, get_engine
 from utils import build_sim_hash
 from utils import build_128_simhash
 from utils import get_all_file_paths
@@ -18,7 +19,7 @@ from utils import get_xml_sections
 from utils import create_bill_name
 from utils import timer_wrapper
 from utils import clean_bill_text
-from utils import parse_xml_section
+from utils import parse_xml_section, parse_soup_section
 
 
 def create_bill_from_dict(element):
@@ -51,19 +52,49 @@ def create_bill_from_dict(element):
     return bill
 
 
+def create_section_from_dict(element):
+    """
+    Create ORM model of the Section from soup Tag
+    :param element: dict with info to create model
+    :return: Bill as orm model
+    """
+    paragraph_text = element.get('text')
+    if not paragraph_text or len(paragraph_text) < 10:
+        return None
+    cleaned = text_cleaning(paragraph_text)
+    simhash_text = build_128_simhash(cleaned)
+    hash_ngrams = build_128_simhash(cleaned, words=True)
+    hash_words = build_128_simhash(cleaned, words=True, n=1)
+    section_id = element.get('id')
+    header = element.get('header')
+    section = Section(text=paragraph_text,
+                      simhash_text=simhash_text,
+                      section_id=section_id,
+                      hash_ngrams=hash_ngrams,
+                      hash_words=hash_words,
+                      length=len(paragraph_text))
+    if header:
+        section.header = header[:225]
+    return section
+
+
 @timer_wrapper
-def parse_and_load():
+def parse_and_load(sections=False, bills=False, full=False):
     """
     !WARNING there is no protection of uniqueness texts/hashes or any other check
     if the text/paragraph was already loaded to DB table or not.
     So run this only once, or truncate table, otherwise you create a lot of duplicates,
      and further search of similar will produce a bunch of noise results.
 
+    :param sections: flag to create sections
+    :param bills: flag to create bills
+    :param full: save both bills and sections (takes much longer time)
     :return:
     """
     # specify your folder here:
     # samples_folder = '/Users/dmytroustynov/programm/BillMap/xc-nlp-test/samples'
-    samples_folder = '/Users/dmytroustynov/programm/congress.nosync/data'
+    # samples_folder = '/Users/dmytroustynov/programm/congress.nosync/data'
+    samples_folder = CONFIG['CONGRESS_ROOT_FOLDER']
     scan_folder = os.path.join(samples_folder, '117')
 
     files = get_all_file_paths(scan_folder, ext='xml')
@@ -75,8 +106,11 @@ def parse_and_load():
         if not os.path.isfile(filename):
             print('file not found')
             continue
-        # parse_xml_and_load_to_db(filename)
-        parse_bill_and_load(filename, session)
+        if sections or full:
+            parse_sections_to_db(filename, session)
+        if bills or full:
+            parse_bill_and_load(filename, session)
+    session.commit()
 
 
 def parse_bill_and_load(xml_path, session):
@@ -120,9 +154,9 @@ def parse_bill_and_load(xml_path, session):
     session.add(bill)
     session.commit()
     if len(title) > 1000:
-        msg = f'WARNING! LARGE TITLE: {bill.id}'
+        msg = f'WARNING! LARGE TITLE: bill.id {bill.id}'
     else:
-        msg = f'created bill, {bill.id}'
+        msg = f'created bill, ID:{bill.id}'
     print(msg)
 
 
@@ -166,6 +200,53 @@ def parse_xml_and_load_to_db(xml_path):
     print('Added {} texts to db, including {} nested'.format(counter+nested_bills_counter, nested_bills_counter))
 
 
+def parse_sections_to_db(xml_path, session):
+    """
+    Parse single xml file and load to DB
+    Splits the bill to sections and store them separately.
+    If section contain subsections (paragraphs) store each of them as well.
+
+    :param xml_path: path to bill in xml format
+    :return: None
+    """
+    # sections = get_xml_sections(xml_path)
+    with open(xml_path) as xml:
+        soup = BeautifulSoup(xml, features="xml")
+    sections = soup.findAll('section')
+    if not sections:
+        return
+    parsed = [parse_soup_section(sec) for sec in sections]
+    print('-- Successfully parsed {} xml sections.'. format(len(parsed)))
+    counter = 0
+    nested_bills_counter = 0
+    origin = create_bill_name(xml_path)
+    full_path = re.sub(os.environ.get('HOME'), '', xml_path)
+    bill_path = BillPath(origin=origin,
+                         full_path=full_path)
+    session.add(bill_path)
+    for num, element in enumerate(parsed):
+        section_item = create_section_from_dict(element)
+        if not section_item:
+            continue
+        section_item.bill_origin = origin
+        session.add(section_item)
+        counter += 1
+        # nested_number = 1
+        for nested in element.get('nested', []):
+            nested_section = create_section_from_dict(nested)
+            if not nested_section:
+                continue
+            nested_section.bill_origin = origin
+            nested_section.parent_id = section_item.section_id
+            session.add(nested_section)
+            nested_bills_counter += 1
+            # nested_number += 1
+        # if counter % 100 == 0:
+        session.commit()
+    if counter:
+        print('Added {} sections to db, including {} nested'.format(counter+nested_bills_counter, nested_bills_counter))
+
+
 @timer_wrapper
 def search_grouped_origins(session, text=None, hsh=None, n=4):
     """
@@ -207,8 +288,8 @@ def find_related_origins(section, session, n=3):
     section_text = etree.tostring(section, method="text", encoding="unicode")
     cleaned = text_cleaning(section_text)
     if cleaned and len(cleaned) > 55:
-        sim_hash = build_sim_hash(cleaned)
-        simhash_value = sim_hash.value
+        simhash_value = build_128_simhash(cleaned)
+        # simhash_value = sim_hash.value
         return search_grouped_origins(hsh=simhash_value, session=session, n=n)
 
 
@@ -284,19 +365,42 @@ def test_parse_and_dump():
         print('successfully serialized {} xml bills to {}.'.format(len(parsed), pkl_file_name))
 
 
+def create_db():
+    db_config = CONFIG['DB_connection']
+    engine = get_engine(db_config)
+    Base.metadata.create_all(engine)
+    print('DB Created. ')
+    table_names = ', '.join([f'"{str(t)}"' for t in Base.metadata.sorted_tables])
+    print(f'Created tables: {table_names}.')
+
+
 if __name__ == '__main__':
+    """
+    To create tables : 
+        python main_tests.py -create_db
+        
+    To parse bills as whole and save them to bills_table:
+        python main_tests.py -bills
+    
+    To parse bill sections and subsections and save them to sections_table:
+        python main_tests.py -sections
+        
+    To parse and load both bills and sections:
+        python main_tests.py -all
+    """
     print(' ==== START ==== ')
+    args = sys.argv
+    # create tables in db according to ORM models
+    if '-create_db' in args:
+        create_db()
     # `parse_and_load` performs loading entities to DB:
     # - read and parse xml files from `samples/congress` folder
-    # - split them to sections and count simhash for each section
+    # - split them to sections and count simhash for each section and the bill
     # - load to PostgreSQL DB
-    # uncomment it once the DB and table was created and connection to it could be established
-    parse_and_load()
-
-    # `test_search` used to search similar paragraphs among stored in DB
-    # you can change the file name and try to use another xml
-    # test_search()
-
-    # `test_parse` is a test function that trying to get sections from another set of bills
-    # test_parse()
+    if '-sections' in args:
+        parse_and_load(sections=True)
+    if '-bills' in args:
+        parse_and_load(bills=True)
+    if '-all' in args:
+        parse_and_load(full=True)
     print(' ==== END ==== ')

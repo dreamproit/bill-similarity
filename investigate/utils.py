@@ -90,6 +90,31 @@ def _get_text(element, sep='\n'):
     return text + sep if text else ''
 
 
+def parse_soup_section(section):
+    raw_text = _get_text(section, sep=' ')
+    raw_text = re.sub(' +', ' ', raw_text)
+    raw_text = re.sub(' \.', '.', raw_text)
+    raw_text = re.sub('\n ?', '\n', raw_text)
+    raw_text = re.sub('\n+', '\n', raw_text).strip()
+    # header = ''
+    section_id = section.attrs.get('id')
+    # label = ''
+    nested = []
+    info = {'text': raw_text,
+            'id': section_id}
+            # 'label': label}
+    for child in section.children:
+        if not isinstance(child, Tag):
+            continue
+        if child.name in ('header', 'heading'):
+            info['header'] = child.text
+        if 'subsection' in child.name:
+            nested.append(parse_soup_section(child))
+    if nested:
+        info['nested'] = nested
+    return info
+
+
 def clean_bill_text(soup):
     """
     Create clean text from beautifulsoup element.
@@ -162,6 +187,23 @@ def create_session(config):
     :type config: dict
     :return: db_session
     """
+    # try:
+    #     user = config['user']
+    #     passw = config['password']
+    #     db_name = config['db_name']
+    #     host = config['host']
+    #     connector = config['connector']
+    # except Exception:
+    #     print('Can`t read configuration from file')
+    #     return None
+    # db_uri = _create_db_connection_uri(user=user, pwd=passw, db_name=db_name,
+    #                                    host=host, connector=connector)
+    engine = get_engine(config)
+    session = sessionmaker(bind=engine, autoflush=False)()
+    return session
+
+
+def get_engine(config):
     try:
         user = config['user']
         passw = config['password']
@@ -173,9 +215,7 @@ def create_session(config):
         return None
     db_uri = _create_db_connection_uri(user=user, pwd=passw, db_name=db_name,
                                        host=host, connector=connector)
-    engine = create_engine(db_uri)
-    session = sessionmaker(bind=engine, autoflush=False)()
-    return session
+    return create_engine(db_uri)
 
 
 # ==================== SIM HASH UTILS ====================
@@ -238,7 +278,7 @@ def build_sim_hash(data, n=4):
     return re.sub(' ', '0', '{0:64b}'.format(sim_obj.value))
 
 
-def build_128_simhash(data, n=6):
+def build_128_simhash(data, n=6, words=False):
     """
     Builds a hash - a 128 bit string of the input data using SimHash algorithm
     hashfunc - fnv-1a hashing for 128 bit
@@ -246,7 +286,10 @@ def build_128_simhash(data, n=6):
     :param n: parameter for ngram
     :return: bit string 128 characters long
     """
-    features = _get_ngrams(data, width=n)
+    if words:
+        features = _get_features(data, width=n)
+    else:
+        features = _get_ngrams(data, width=n)
     sim_obj = Simhash(features, f=128, hashfunc=fnv1a_128)
     return re.sub(' ', '0', '{0:128b}'.format(sim_obj.value))
 
@@ -295,13 +338,6 @@ def chunk(iterable, chunk_size=50):
     while i <= len(iterable):
         yield iterable[i:i + chunk_size]
         i += chunk_size
-
-
-def get_asymmetric_diff(s1, s2):
-    assert isinstance(s1, set), "s1 must be set"
-    assert isinstance(s2, set), "s2 must be set"
-    assert len(s1) != 0, "shouldn't be empty set"
-    return len(s1.intersection(s2)) / len(s1)
 
 
 def create_bill_name(path):
@@ -359,26 +395,3 @@ def test_utils():
     for filename in files[:20]:
         sections = get_xml_sections(filename)
         print('found {} sections in {}'.format(len(sections), filename))
-
-
-def test_utils_0():
-    import random
-
-    s1 = {random.randint(1, 100) for i in range(15)}
-    s2 = {random.randint(1, 20) for i in range(10)}
-
-    diff = get_asymmetric_diff(s1, s2)
-    diff2 = get_asymmetric_diff(s2, s1)
-    print('s1: ', s1)
-    print('s2: ', s2)
-    print('diff s1--s2', diff)
-    print('diff s2--s1', diff2)
-    print('No intersection: ', get_asymmetric_diff({1, 2, 3}, {4, 5, 6}))
-    print('Full intersection: ', get_asymmetric_diff({1, 2, 3}, {1, 2, 3}))
-    print('Full s1 inside s2: ', get_asymmetric_diff({1, 2, 3}, {1, 2, 3, 4, 5, 6}))
-    print('Full s2 inside s1: ', get_asymmetric_diff({1, 2, 3, 4, 5, 6}, {1, 2, 3}))
-    print('Partial s1 inside large s2: ', get_asymmetric_diff({1, 2, 3}, {1, 3, 4, 5, 6, 7, 8}))
-
-
-if __name__ == '__main__':
-    test_utils()
