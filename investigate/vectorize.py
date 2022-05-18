@@ -140,8 +140,8 @@ def create_json_response(A_doc_name, B_doc_name, doc_sim_score, sec_doc_sim_scor
 
 def main_test():
     BIG_BILLS = ['BILLS-116s1790enr.xml', 'BILLS-116hjres31enr.xml']
-    # BIG_BILLS = ['BILLS-116hconres106enr.xml', 'BILLS-116hconres92enr.xml']
-    fld = '/Users/dmytroustynov/programm/BillMap/xc-nlp-test/samples/congress/116/uslm'
+    # 'BILLS-116hconres106enr.xml', 'BILLS-116hconres92enr.xml'
+    fld = PATH_116_USLM_TRAIN
     path_a = os.path.join(fld, BIG_BILLS[0])
     path_b = os.path.join(fld, BIG_BILLS[1])
 
@@ -224,7 +224,7 @@ def create_models():
     for bill in text_bills.all():
         doc_corpus.append(text_cleaning(bill.bill_text))
     print('- corpus with {} bills from DB created - OK.'.format(len(doc_corpus)))
-    print('took {} sec'.format(round(time() - t0, 3)))
+    print(f'took {round(time() - t0, 3)} sec')
     count_vectorizer = CountVectorizer(ngram_range=(4, 4),
                                        tokenizer=RegexpTokenizer(r"\w+").tokenize,
                                        lowercase=True)
@@ -232,7 +232,7 @@ def create_models():
     t0 = time()
     count_vectorizer.fit_transform(doc_corpus)
     print('- model fit - OK.')
-    print('took {} sec'.format(round(time() - t0, 3)))
+    print(f'took {round(time() - t0, 3)} sec')
     model_filename = 'CV_model.pkl'
     with open(model_filename, 'wb') as pkl:
         pickle.dump(count_vectorizer, pkl)
@@ -247,7 +247,7 @@ def create_models():
     for bill in text_sections.all():
         sections_corpus.append(text_cleaning(bill.bill_text))
     print('- corpus with {} sections from DB created - OK.'.format(len(sections_corpus)))
-    print('took {} sec'.format(round(time() - t0, 3)))
+    print(f'took {round(time() - t0, 3)} sec')
     count_vectorizer_sections = CountVectorizer(ngram_range=(4, 4),
                                                 tokenizer=RegexpTokenizer(r"\w+").tokenize,
                                                 lowercase=True)
@@ -255,7 +255,7 @@ def create_models():
     t0 = time()
     count_vectorizer_sections.fit_transform(sections_corpus)
     print(' - model fit - OK')
-    print('took {} sec'.format(round(time() - t0, 3)))
+    print(f'took {round(time() - t0, 3)} sec')
     sections_model_filename = 'CV_sections_model.pkl'
     with open(sections_model_filename, 'wb') as pkl:
         pickle.dump(count_vectorizer_sections, pkl)

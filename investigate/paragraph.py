@@ -3,7 +3,6 @@ Comparable class for bill paragraphs
 
 """
 import pickle
-import random
 from itertools import product
 
 from utils import build_sim_hash
@@ -34,7 +33,6 @@ class Paragraph:
         text = None
         if data.get('text') is not None:
             text = data.pop('text')
-        # hash_value = data.get('hash_value')
         return Paragraph(text, **data)
 
     def to_dict(self):
@@ -70,7 +68,6 @@ class Paragraph:
     def compare(self, other):
         similars = []
         if self is other:
-            # print('the same')
             return [('the same bills were compared', True)]
         for p1, p2 in product(self.get_children(), other.get_children()):
             h1 = p1.hash_value
@@ -92,23 +89,8 @@ class Paragraph:
         return '{} - [{}]'.format(self.text, len(self))
 
 
-def test_paragraph():
-    with open('../investigate/paragraphs.pkl', 'rb') as pkl:
-        paragraphs = pickle.load(pkl)
-    p1 = random.choice(paragraphs)
-    p2 = random.choice(paragraphs)
-    sim = p1.compare(p2)
-    print(sim)
-
-
 def test_parse():
 
-    # p1 = Paragraph('lorem ipsum dolor')
-    # p2 = Paragraph(' si vis pacem para bellum')
-    # p1.add_child(p2)
-    # print(p1.full_text())
-    # print('\n')
-    # print(p1.compare(p2))
     with open('../investigate/bills_6.pkl', 'rb') as pkl:
         bills = pickle.load(pkl)
     paragraphs = dict()
@@ -121,16 +103,3 @@ def test_parse():
     print('All {} converted.'.format(len(paragraphs)))
     with open('../investigate/paragraphs_6.pkl', 'wb') as file:
         pickle.dump(paragraphs, file)
-
-    # p4 = random.choice(paragraphs)
-    # for p in paragraphs:
-    #     sims = p4.compare(p)
-    #     if sims:
-    #         print('found similar')
-    #         print(p.text[:95])
-    # print('Not found similar' if not len(sims) else '\n'.join(sims))
-
-
-if __name__ == '__main__':
-    test_paragraph()
-    print('____END_____')

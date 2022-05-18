@@ -291,12 +291,11 @@ def find_related_origins(section, session, n=3):
 @timer_wrapper
 def test_search():
     fn = '../../../congress.nosync/data/117/bills/hr/hr1500/text-versions/ih/document.xml'
-    # fn = '../../../congress.nosync/data/117/bills/sres/sres323/text-versions/ats/document.xml'
-    # fn = '../../../congress.nosync/data/117/bills/sconres/sconres34/text-versions/is/document.xml'
-    # fn = '../../../congress.nosync/data/117/bills/hr/hr1030/text-versions/ih/document.xml'
-
-    # fn = '../../../congress.nosync/data/117/bills/s/s2569/text-versions/is/document.xml'
-    # fn = '../../../congress.nosync/data/117/bills/hr/hr4521/text-versions/eas/document.xml'
+    # '../../../congress.nosync/data/117/bills/sres/sres323/text-versions/ats/document.xml'
+    # '../../../congress.nosync/data/117/bills/sconres/sconres34/text-versions/is/document.xml'
+    # '../../../congress.nosync/data/117/bills/hr/hr1030/text-versions/ih/document.xml'
+    # '../../../congress.nosync/data/117/bills/s/s2569/text-versions/is/document.xml'
+    #  '../../../congress.nosync/data/117/bills/hr/hr4521/text-versions/eas/document.xml'
     sections = get_xml_sections(fn)
     db_config = CONFIG['DB_connection']
     session = create_session(db_config)
