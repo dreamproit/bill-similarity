@@ -34,7 +34,7 @@ SAMPLE_BILL_PATHS_TRAIN = [join(PATH_116_USLM_TRAIN, f) for f in listdir(PATH_11
                            isfile(join(PATH_116_USLM_TRAIN, f))]
 SAMPLE_BILL_PATHS = [join(PATH_117_USLM, f) for f in listdir(PATH_117_USLM) if isfile(join(PATH_117_USLM, f))]
 
-NAMESPACES = {'uslm': 'http://xml.house.gov/schemas/uslm/1.0'}
+NAMESPACES = {'uslm': 'https://xml.house.gov/schemas/uslm/1.0'}
 
 
 def get_enum(section) -> str:
@@ -225,8 +225,6 @@ def create_models():
         doc_corpus.append(text_cleaning(bill.bill_text))
     print('- corpus with {} bills from DB created - OK.'.format(len(doc_corpus)))
     print('took {} sec'.format(round(time() - t0, 3)))
-    # with open('bill_texts.pkl', 'wb') as pkl:
-    #     pickle.dump(text_corpus, pkl)
     count_vectorizer = CountVectorizer(ngram_range=(4, 4),
                                        tokenizer=RegexpTokenizer(r"\w+").tokenize,
                                        lowercase=True)
@@ -324,7 +322,6 @@ def test_vectorizer():
         if sim_bill:
             print('   Bill ID: ', sim_bill.id)
             print(sim_bill.bill_text)
-            # cnt = str(bill_simhash ^ sim_bill.simhash_text).count('1')
             print('bit count: ', str(bill_simhash ^ sim_bill.simhash_text).count('1'))
 
 

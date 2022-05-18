@@ -3,6 +3,7 @@ Comparable class for bill paragraphs
 
 """
 import pickle
+import random
 from itertools import product
 
 from utils import build_sim_hash
@@ -92,12 +93,10 @@ class Paragraph:
 
 
 def test_paragraph():
-    import random
-
     with open('../investigate/paragraphs.pkl', 'rb') as pkl:
         paragraphs = pickle.load(pkl)
-    p1 = paragraphs[random.randint(0, len(paragraphs))]
-    p2 = paragraphs[random.randint(0, len(paragraphs))]
+    p1 = random.choice(paragraphs)
+    p2 = random.choice(paragraphs)
     sim = p1.compare(p2)
     print(sim)
 

@@ -209,7 +209,6 @@ def parse_sections_to_db(xml_path, session):
     :param xml_path: path to bill in xml format
     :return: None
     """
-    # sections = get_xml_sections(xml_path)
     with open(xml_path) as xml:
         soup = BeautifulSoup(xml, features="xml")
     sections = soup.findAll('section')
@@ -231,7 +230,6 @@ def parse_sections_to_db(xml_path, session):
         section_item.bill_origin = origin
         session.add(section_item)
         counter += 1
-        # nested_number = 1
         for nested in element.get('nested', []):
             nested_section = create_section_from_dict(nested)
             if not nested_section:
@@ -240,8 +238,6 @@ def parse_sections_to_db(xml_path, session):
             nested_section.parent_id = section_item.section_id
             session.add(nested_section)
             nested_bills_counter += 1
-            # nested_number += 1
-        # if counter % 100 == 0:
         session.commit()
     if counter:
         print('Added {} sections to db, including {} nested'.format(counter+nested_bills_counter, nested_bills_counter))
@@ -289,7 +285,6 @@ def find_related_origins(section, session, n=3):
     cleaned = text_cleaning(section_text)
     if cleaned and len(cleaned) > 55:
         simhash_value = build_128_simhash(cleaned)
-        # simhash_value = sim_hash.value
         return search_grouped_origins(hsh=simhash_value, session=session, n=n)
 
 
@@ -300,7 +295,7 @@ def test_search():
     # fn = '../../../congress.nosync/data/117/bills/sconres/sconres34/text-versions/is/document.xml'
     # fn = '../../../congress.nosync/data/117/bills/hr/hr1030/text-versions/ih/document.xml'
 
-    fn = '../../../congress.nosync/data/117/bills/s/s2569/text-versions/is/document.xml'
+    # fn = '../../../congress.nosync/data/117/bills/s/s2569/text-versions/is/document.xml'
     # fn = '../../../congress.nosync/data/117/bills/hr/hr4521/text-versions/eas/document.xml'
     sections = get_xml_sections(fn)
     db_config = CONFIG['DB_connection']

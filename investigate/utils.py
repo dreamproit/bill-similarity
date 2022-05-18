@@ -5,6 +5,8 @@ When going to production probably we will refactor utils to several modules acco
 
 # LARGE prime numbers for better performing fnv-1a hash function in 128bit
 # see: https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function#FNV_hash_parameters
+import sys
+
 FNV_128_PRIME = 0x1000000000000000000013b
 FNV1_128A_INIT = 0x6c62272e07bb014262b821756295c58d
 
@@ -22,24 +24,6 @@ from lxml import etree
 
 
 # ==================== TEXT UTILS ====================
-def clean_text(text):
-    """
-        Cleaning text for further processing with minhash / simhash
-        - remove /r /n , remove stopwords, remove punctuation, remove digitals,
-        - remove other patterns like http://
-        :param text:
-        :return: cleaned text
-        """
-    text = re.sub('\n|\r', ' ', text.lower())
-    # clean links and emails
-    text = re.sub(r'((www\.[^\s]+)|(https?://[^\s]+))', '', text)
-    text = re.sub(r'[\w\+.-\]+@[A-Za-z-]+\.[\w.]+', '', text)
-    # clean punctuation
-    text = re.sub(r'[^\w ]', '', text)
-    text = re.sub(' +', ' ', text)
-    return text.strip()
-
-
 def text_cleaning(text):
     """
     Clean text method
@@ -96,13 +80,10 @@ def parse_soup_section(section):
     raw_text = re.sub(' \.', '.', raw_text)
     raw_text = re.sub('\n ?', '\n', raw_text)
     raw_text = re.sub('\n+', '\n', raw_text).strip()
-    # header = ''
     section_id = section.attrs.get('id')
-    # label = ''
     nested = []
     info = {'text': raw_text,
             'id': section_id}
-            # 'label': label}
     for child in section.children:
         if not isinstance(child, Tag):
             continue
@@ -187,30 +168,21 @@ def create_session(config):
     :type config: dict
     :return: db_session
     """
-    # try:
-    #     user = config['user']
-    #     passw = config['password']
-    #     db_name = config['db_name']
-    #     host = config['host']
-    #     connector = config['connector']
-    # except Exception:
-    #     print('Can`t read configuration from file')
-    #     return None
-    # db_uri = _create_db_connection_uri(user=user, pwd=passw, db_name=db_name,
-    #                                    host=host, connector=connector)
     engine = get_engine(config)
-    session = sessionmaker(bind=engine, autoflush=False)()
-    return session
+    if engine:
+        return sessionmaker(bind=engine, autoflush=False)()
+    else:
+        sys.exit()
 
 
 def get_engine(config):
     try:
-        user = config['user']
+        user = config['wuser']
         passw = config['password']
         db_name = config['db_name']
         host = config['host']
         connector = config['connector']
-    except Exception:
+    except KeyError:
         print('Can`t read configuration from file')
         return None
     db_uri = _create_db_connection_uri(user=user, pwd=passw, db_name=db_name,
@@ -357,7 +329,7 @@ def create_bill_name(path):
 
 
 def get_xml_sections(xml_path):
-    namespaces = {'uslm': 'http://xml.house.gov/schemas/uslm/1.0'}
+    namespaces = {'uslm': 'https://xml.house.gov/schemas/uslm/1.0'}
     bill_tree = etree.parse(xml_path)
     try:
         sections = bill_tree.xpath('//uslm:section', namespaces=namespaces) or bill_tree.xpath('//section')

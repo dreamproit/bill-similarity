@@ -17,7 +17,7 @@ from utils import timer_wrapper
 from utils import parse_xml_section
 from utils import clean_bill_text
 
-NAMESPACES = {'uslm': 'http://xml.house.gov/schemas/uslm/1.0'}
+NAMESPACES = {'uslm': 'https://xml.house.gov/schemas/uslm/1.0'}
 
 
 def find_similar_sections(section, session, n=3, ):
@@ -112,9 +112,7 @@ def search_similar_by_title(session, title=None, title_hash=None, n=4, verbose=F
             if verbose:
                 print('ERROR, neither hash, nor title specified')
             return []
-        # cleaned = text_cleaning(title)
         hash_to_find = build_128_simhash(title)
-        # hash_to_find = build_sim_hash(title)
     else:
         hash_to_find = title_hash
     if verbose:
@@ -203,7 +201,6 @@ def test_search():
         xml_file = os.path.join(root_folder, filename)
         with open(xml_file) as xml:
             soup = BeautifulSoup(xml, features="xml")
-        # sections = list(soup.findAll('section'))
         raw_text = clean_bill_text(soup)
         found = search_similar_by_text(session, text=raw_text, n=14, verbose=True)
         if found:
@@ -223,7 +220,6 @@ def test_search():
         'Authorizing the use of the Capitol Grounds for the National Peace Officers Memorial Service and Pipe Band Exhibition.',
     ]
     for title in titles:
-        # cleaned = text_cleaning(title)
         found_titles = search_similar_by_title(session, title=title, n=8, verbose=True)
         if not found_titles:
             print(f'NOT FOUND similar for {title}')
@@ -240,12 +236,9 @@ def update_hashes_script():
     db_config = CONFIG['DB_connection']
     session = create_session(db_config)
     for num, bill in enumerate(session.query(Bill).all()):
-        # simhash_text = build_128_simhash(text_cleaning(bill.bill_text))
         simhash_title = build_sim_hash(bill.title)
-        # bill.simhash_text = simhash_text
         bill.hash_title64 = simhash_title
         session.add(bill)
-        # print(f'Updated {bill.id}')
         if num % 100 == 0:
             session.commit()
             print(num)
