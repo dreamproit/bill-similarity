@@ -70,7 +70,7 @@ def search_similar_by_text(session, text=None, text_hash=None, bill_id=None, n=6
         else:
             hash_to_find = text_hash
         if verbose:
-            print('hash to find: ', hash_to_find)
+            print(f' hash to find: {hash_to_find}')
         sql_template = "SELECT * FROM {db_table} " \
                        "WHERE bit_count(simhash_text # b'{hash_to_find}') < {n}"
         query = text_to_query(sql_template.format(db_table=db_table_name,
@@ -116,7 +116,7 @@ def search_similar_by_title(session, title=None, title_hash=None, n=4, verbose=F
     else:
         hash_to_find = title_hash
     if verbose:
-        print('hash to find: ', hash_to_find)
+        print(f' hash to find: {hash_to_find}')
     sql_template = """
     SELECT * FROM {db_table} 
     WHERE bit_count(simhash_title # b'{hash_to_find}') < {n}"""
@@ -150,10 +150,10 @@ def search_similar(session, text=None, hsh=None, n=4):
             print('ERROR, neither hsh, nor text specified')
             return []
         cleaned = text_cleaning(text)
-        hash_to_find = build_sim_hash(cleaned).value
+        hash_to_find = build_sim_hash(cleaned)
     else:
         hash_to_find = hsh
-    print('hash to find: ', hsh)
+    print(f' hash to find: {hash_to_find}')
     sql_template = """SELECT * from {} WHERE BIT_COUNT({} ^ simhash_text) < {}"""
     query = text_to_query(sql_template.format(db_table_name, hash_to_find, n))
     return session.query(Bill).from_statement(query).all()

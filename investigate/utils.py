@@ -33,7 +33,7 @@ def text_cleaning(text):
     text = re.sub(r'https?://\S+|www\.\S+', '', text)
     text = re.sub(r'<.*?>+', '', text)
     text = re.sub(r'[%s]' % re.escape(string.punctuation), '', text)
-    text = re.sub(r'\n', '', text)
+    text = text.replace('\n', '')
     text = re.sub(r'\w*\d\w*', '', text)
     text = re.sub(' +', ' ', text)
     return text
@@ -64,7 +64,7 @@ def _get_text(element, sep='\n'):
     if not children:
         txt = element.getText().strip()
         txt = re.sub(' +', ' ', txt)
-        return re.sub('\n', '', txt)
+        return txt.replace('\n', '')
     text = ''
     for child in children:
         text += _get_text(child, sep) + ' '
@@ -77,7 +77,7 @@ def _get_text(element, sep='\n'):
 def parse_soup_section(section):
     raw_text = _get_text(section, sep=' ')
     raw_text = re.sub(' +', ' ', raw_text)
-    raw_text = re.sub(' \.', '.', raw_text)
+    raw_text = raw_text.replace(' .', '.')
     raw_text = re.sub('\n ?', '\n', raw_text)
     raw_text = re.sub('\n+', '\n', raw_text).strip()
     section_id = section.attrs.get('id')
@@ -107,7 +107,7 @@ def clean_bill_text(soup):
     if not re.sub('\n+', '', raw_text):
         raw_text = soup.text
     raw_text = re.sub(' +', ' ', raw_text)
-    raw_text = re.sub(' \.', '.', raw_text)
+    raw_text = raw_text.replace(' .', '.')
     raw_text = re.sub('\n ?', '\n', raw_text)
     raw_text = re.sub('\n+', '\n', raw_text).strip()
     return raw_text
@@ -177,7 +177,7 @@ def create_session(config):
 
 def get_engine(config):
     try:
-        user = config['wuser']
+        user = config['user']
         passw = config['password']
         db_name = config['db_name']
         host = config['host']
@@ -247,7 +247,7 @@ def build_sim_hash(data, n=4):
     """
     features = _get_ngrams(text=data, width=n)
     sim_obj = Simhash(features, hashfunc=fnv1a_64)
-    return re.sub(' ', '0', '{0:64b}'.format(sim_obj.value))
+    return '{0:64b}'.format(sim_obj.value).replace(' ', '0')
 
 
 def build_128_simhash(data, n=6, words=False):
@@ -263,7 +263,7 @@ def build_128_simhash(data, n=6, words=False):
     else:
         features = _get_ngrams(data, width=n)
     sim_obj = Simhash(features, f=128, hashfunc=fnv1a_128)
-    return re.sub(' ', '0', '{0:128b}'.format(sim_obj.value))
+    return '{0:128b}'.format(sim_obj.value).replace(' ', '0')
 
 
 # ==================== READING FILES UTILS ====================
@@ -315,17 +315,14 @@ def chunk(iterable, chunk_size=50):
 def create_bill_name(path):
     path = re.sub(os.environ.get('HOME'), '', path)
     folders = path.split(os.path.sep)
-    try:
-        congress_number = re.findall(r'\d+', path)[0]
-        name = 'BILLS_' + congress_number
-        if 'bills' in folders:
-            folders.remove('bills')
-        if 'text-versions' in folders:
-            folders.remove('text-versions')
-        name += '_'.join(folders[-4:])
-        return name
-    except:
-        return name + '_'.join(folders)
+    congress_number = re.findall(r'\d+', path)[0]
+    name = 'BILLS_' + congress_number
+    if 'bills' in folders:
+        folders.remove('bills')
+    if 'text-versions' in folders:
+        folders.remove('text-versions')
+    name += '_'.join(folders[-4:])
+    return name
 
 
 def get_xml_sections(xml_path):

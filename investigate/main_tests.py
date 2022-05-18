@@ -48,7 +48,7 @@ def create_bill_from_dict(element):
         bill.label = label
     if title:
         bill.title = title
-        bill.simhash_title = build_sim_hash(title).value
+        bill.simhash_title = build_sim_hash(title)
     return bill
 
 
@@ -266,10 +266,10 @@ def search_grouped_origins(session, text=None, hsh=None, n=4):
             print('ERROR, neither hsh, nor text specified')
             return []
         cleaned = text_cleaning(text)
-        hash_to_find = build_sim_hash(cleaned).value
+        hash_to_find = build_sim_hash(cleaned)
     else:
         hash_to_find = hsh
-    print('hash to find: ', hsh)
+    print(f' hash to find: {hash_to_find}')
     sql_template = """
         SELECT origin, sum(bit_count({hsh} ^ simhash_text)) as sum 
         from {db_table} WHERE BIT_COUNT({hsh} ^ simhash_text) < {offset} 
