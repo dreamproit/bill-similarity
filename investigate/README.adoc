@@ -1,13 +1,13 @@
-= Ivestigation of similarities search with Simhashes
+= Investigation of similarities search with Simhashes
 :toc:
 
 == Brief description
-This folder contains data, scripts, utilities and materials on investigation of similarity search within Bills using simhash approach.
+This directory contains data, scripts, utilities and materials for the investigation of similarity search of bills using the simhash approach.
 
 == Simhash explanation
-Searching for near similar documents among large corpus of texts is quite often task and to solve it different types of hashing are widely used in search engines such as Google, Netflix etc. or plagiarism detection.
+Searching for near similar documents among large corpus of texts is often an important task and different kinds of hash are used to do this in search engines such as Google, Netflix etc. or for plagiarism detection.
 
-We use here the SimHash algorithm.
+Here, we use the SimHash algorithm.
 
 The SimHash algorithm is a locality-sensitive hashing algorithm. Locality-sensitive means that instead of the algorithm being sensitive to variations in the input stream like a cryptographic hashing algorithm (SHA, MD5), it ignores variations (to a degree) and groups similar content together. Similar input strings will get similar or even the same hashes.
 
