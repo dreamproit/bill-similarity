@@ -1,0 +1,93 @@
+= bill-similarity
+:toc:
+This document contains an explanation of the results of the investigation of similarity search among Bills using simhashes and pure SQL techniques.
+
+== Brief description
+
+We have investigated the problematic of searching near similar Bills and were focused on two different techniques:
+
+- https://github.com/arachnidllc/bill-similarity/blob/investigate_simhashes/docs/SQL_APPROACH.adoc[SQL Approach]:
+Based on developing pure SQL queries with installation of the additional extensions for the database to support similarity search and building efficient indexes in DB;
+- https://github.com/arachnidllc/bill-similarity/blob/investigate_simhashes/investigate/README.adoc[SimHash Approach] :
+Based on the usage of SimHashes (fingerprints) of every document and searching among similar fingerprints with adjustable measure of similarity.
+
+Each of these approaches has their pros and cons - for example with SimHashes we can find similar documents quite swiftly, but we can't calculate asymmetric similarity metrics between each document (the score of the similarity, see xref:How does it work?[below]), while the pure SQL approach can calculate metrics, but is much more sensible to the size of the DB and texts length and may become significantly slower in time due to multiple joins.
+
+Though combining two approaches together we can achieve excellent results and get full information with metrics in a fancy and quick way. Using simhashes we significantly reduce the quantity of rows fetched from the DB to calculate their similarity scores with db extensions.
+
+=== Explanation of SimHashes and SQL approaches
+
+To get full information and broader explanation about each technique please see the corresponding documentation:
+
+    - https://github.com/arachnidllc/bill-similarity/blob/investigate_simhashes/docs/SQL_APPROACH.adoc[Searching similars with SQL]
+
+    - https://github.com/arachnidllc/bill-similarity/blob/investigate_simhashes/investigate/README.adoc[Searching similars with SimHashes]
+
+
+== Steps to reproduce locally
+
+=== 1. Installation of the extensions for the DB
+We need some extensions for the PostgreSQL to support similarity search, and to create indexes, that increase performance of our queries.
+See instructions in SQL Approach documentation.
+
+=== 2. Installation of python packages
+From the project root folder run `pip install -r investigate/requirements.txt`.
+it will install all dependencies, required to run python scripts.
+You also need to specify some settings for the DB connections and file storage pathes, see instructions in Simhash Approach documentation.
+
+=== 3. Preparing data in database
+To use similarity search in PostgreSQL we need to extend existing data for the bills with some additional fields and indexes, such as:
+
+- binary strings to store SimHash of the text/title
+- arrays of the n-grams to store features (sorted n-grams) of the text to use in similarities score calculations
+
+We also need to build indexes and create SQL functions stored in db, that we then will use in our queries.
+
+Full explanation of the data types used in db tables and orm models see in corresponding documentation.
+
+(TODO): make data preparation in a single run.
+(TODO for further usage only): modify parsers/workers, so they fill all necessary fields on creating new instances or add such data processing as a separate worker (task) in the pipeline.
+
+=== 4. Running search queries to test
+`SQL Query will be here(TBD)`
+
+== How does it work?
+
+Once database has all additional columns filled and indexes for them have built, founding similar documents and ordering them by relevance could operate quite stable and fast.
+
+The main idea here is to fetch most relevant data with quick and "light" part of the query, and then process only them with a "heavy" part of the query.
+
+Firstly we filter all documents, that are similar to the current document by the SimHash (fingerprint). We can adjust the threshold to grab more documents if we want and have wider search results, that will appear on the "second page". Thus, we ignore the major part of the database in further more complex processing, e.g. those documents that will have zero or close to zero similarity scores because they will have more difference between SimHashes.
+
+Simhash is a locality-sensitive hashing mechanism (see documentation), that builds close or even identical hashes for similar documents. Counting bitwise XOR for bit strings is pretty fast operation, that's why it performs quickly, and it depends only on the size of DB and is independent of the texts' length.
+
+Another part of the query then operates with filtered part of the documents performing calculations of the asymmetric similarity scores between documents using DB extensions and stored functions that we created.
+
+_Asymmetric score_  here means that similarity measure between two documents is counted not just like distance (that is a _symmetric_ measure, like Jaccard distance, Hamming distance or similarity in percents when `diff(A, B) == diff(B, A)`), but as two values that represent how much each document similar to another. In this case `diff(A, B) != diff(B, A)`.
+
+With symmetric score we can say that two documents have 93.5% similarity, and it works vice versa.
+
+With asymmetric score we can say that the difference between `A and B` is 98.5% , while difference between `B and A` is 65.2%.
+It is very usefully, if document `A` contains almost full document `B` inside, while `B` is only a part of bigger `A`.
+
+"Smlar" extension for PostgreSQL we have installed above is used to perform such calculations, and it is based on calculating cosine difference between arrays, while arrays representing each document are n-grams that are also stored in database and created with functions that we added.
+
+It worth mentioning that, storing n-grams of each text takes additional space in DB, since it creates significant redundancy of the data we store.
+The alternative is to perform calculations with each text on the python side that will take more time especially with long texts.
+
+Thus storing n-grams in DB is a compromise between space and speed, and we choose speed.
+
+== Further implementation
+
+Once we want to integrate this complex approach into any project here the RoadMap on how to do this.
+
+1. Update env with new dependencies
+2. Perform DB modifications:
+    - alter existing tables to store additional fields for simhash values and ngrams
+    - add required DB extensions and functions
+3. Fill these new fields for existing entities  with calculated simhash values, n-grams etc.
+4. Add indexes for newly created and updated fields. *IMPORTANT!* Indexes should be created only after all new columns were already filled. Otherwise, creating index on the empty table before bulk data was already added will lead to the fact that with every insert index must be updated and populating table with thousands of new values will take much longer time.
+5. Add calculating of simhashes, n-grams and other required fields into the workflow where new data is created and added to the database. Single insert with rebuilding index doesn't take much more time against bulk insertion
+6. Integrate search query described here into search request processing.
+
+As an alternative for the p.5 in order to not interfere too much in the code of existing project, we can add another procedure (task) to the existing pipeline of creating/saving/processing new data in our storage, which will update required fields for newly created  DB instances as a separate process.
