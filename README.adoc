@@ -29,6 +29,85 @@ To get a more detailed explanation of each technique please see the correspondin
 === 1. Installation of the extensions for the DB
 We need some extensions for the PostgreSQL to support similarity search, and to create indexes, that increase performance of our queries.
 See instructions in SQL Approach documentation.
++++ <details><summary> +++
+View detailed steps :
++++ </summary><div> +++
+CAUTION:  need superuser access to DB
+
+==== 1.1. Install `smlar` plugin
+* clone `https://github.com/jirutka/smlar`
+* from the smlar folder run commands:
+`$ USE_PGXS=1 make`
+
+`$ USE_PGXS=1 make install`
+
+==== 1.2 Create extension smlar
+* enter postgres command line:
+run `psql`
+
+* connect to your database : `\c bills`.
+_bills_ - is a database name.
+
+* create extension with command:
+`CREATE EXTENSION smlar`
+
+* Settings for `smlar`
+----
+set
+   smlar.threshold = 0.6;
+
+set
+   smlar.persistent_cache = on;
+
+set
+   smlar.type = "cosine";
+----
+
+==== 1.3 Add functions into DB
+* run command in postgres command line:
+----
+CREATE OR REPLACE FUNCTION array_to_col(anyarray)
+RETURNS SETOF anyelement AS
+$$
+    SELECT $1[n]
+    FROM generate_series(1, array_upper($1, 1) - array_lower($1, 1) + 1) AS n;
+$$ LANGUAGE SQL RETURNS NULL ON NULL INPUT IMMUTABLE;
+----
+* run command in postgres command line:
+----
+CREATE OR REPLACE FUNCTION word_ngrams(str text, n integer) RETURNS text[]
+   immutable
+   strict
+   language plpgsql
+as
+$$
+declare
+   i      int;
+   arr    text[];
+   result text[];
+   q      text[];
+begin
+   arr := regexp_split_to_array(lower(str), '[^[:alnum:]]+');
+   IF cardinality(arr) <= n THEN
+       return ARRAY [lower(str)];
+   END IF;
+   for i in 1 .. cardinality(arr) - n + 1
+       loop
+           q := arr[i : i + n - 1];
+           IF result IS NULL THEN
+               result := ARRAY [array_to_string(q, ' ')];
+           ELSE
+               /* append with "or" */
+               result := result || array_to_string(q, ' ');
+           END IF;
+       end loop;
+   return result;
+end
+$$;
+----
+
+
++++ </div></details> +++
 
 === 2. Installation of python packages
 From the project root folder run `pip install -r investigate/requirements.txt`.
@@ -48,8 +127,197 @@ Full explanation of the data types used in db tables and orm models see in corre
 (TODO): make data preparation in a single run.
 (TODO for further usage only): modify parsers/workers, so they fill all necessary fields on creating new instances or add such data processing as a separate worker (task) in the pipeline.
 
++++ <details><summary> +++
+View detailed steps and commands:
++++ </summary><div> +++
+
+==== 3.1 Add required column:
+----
+alter table sections alter column text_query_index_col type text[]
+  using text_query_index_col::text[];
+----
+==== 3.2. Populate column with data
+----
+update
+  sections
+set
+  text_query_index_col = array_unique(word_ngrams(text, 4))
+where
+  id in (
+  select
+     id
+  from
+     sections
+  where
+     parent_id is null
+     and text_query_index_col is null
+  order by
+     length desc
+)
+----
+==== 3.3  Create indexes in DB
+----
+create index parent_is_null_text_query_index_col_siml_gist_idx
+   on
+       sections
+           using GIST (text_query_index_col _text_sml_ops)
+   where
+       parent_id is null;
+
+create index parent_is_null_text_query_index_col_siml_gist_idx
+   on sections using gist (text_query_index_col _text_sml_ops)
+   where (parent_id IS NULL);
+
+create index bill_id__bill_version__parent_null
+   on sections (bill_id, bill_version)
+   where (parent_id IS NULL);
+----
++++ </div></details> +++
+
+
 === 4. Running search queries to test
-`SQL Query will be here(TBD)`
+After you have all previous steps completed you can retrieve results of similarity search with scores with sql queries as follows.
+
+==== 4.1 Query to search similar for the single bill:
+----
+select l_bid                                                as left_bill_id,
+      l_bv                                                 as left_bill_version,
+      r_bid                                                as right_bill_id,
+      r_bv                                                 as right_bill_version,
+      avg(sh)                                              as avg_sh_d,
+      max(sh)                                              as max_sh_d,
+      jsonb_array_length(jsonb_agg(lr_dist)::jsonb)        as matched_sections,
+      jsonb_agg(lr_dist)                                   as sections_score,
+      round(avg(smlar(l_w, r_w, 'N.i / N.a')::numeric), 2) as l_r_score,
+      round(avg(smlar(l_w, r_w, 'N.i / N.b'))::numeric, 2) as r_l_score
+from (
+        select CONCAT(greatest(l.id, r.id), '-', least(l.id, r.id)) as uid,
+               l.bill_id                                               l_bid,
+               l.bill_version                                          l_bv,
+               r.bill_id                                               r_bid,
+               r.bill_version                                          r_bv,
+               l.text_query_index_col                                  l_w,
+               r.text_query_index_col                                  r_w,
+               bit_count(r.simhash_text # l.simhash_text)           as sh,
+               json_build_object(
+                       'left_right_score',
+                       ROUND(smlar(l.text_query_index_col, r.text_query_index_col, 'N.i / N.a')::numeric, 6),
+                       'right_left_score',
+                       ROUND(smlar(r.text_query_index_col, l.text_query_index_col, 'N.i / N.a')::numeric, 6),
+                       'shd', bit_count(r.simhash_text # l.simhash_text),
+                       'left_section_id', l.id,
+                       'right_section_id', r.id,
+                       'l_len', l.length,
+                       'r_len', r.length
+                   )::jsonb                                         as lr_dist
+        from (
+                 select *
+                 from sections
+                 where parent_id is null
+                   and bill_id = '117hr1512'
+                   and bill_version ='ih'
+             ) l
+                 join (
+            select *
+            from sections
+            where parent_id is null
+        ) r on
+            bit_count(r.simhash_text # l.simhash_text) < 10
+--           and r.words % l.words
+    ) as t
+        left join xml_bills l_b on
+           l_b.bill_number = t.l_bid
+       and l_b.bill_version = l_bv
+        left join xml_bills r_b on
+           r_b.bill_number = t.r_bid
+       and r_b.bill_version = r_bv
+group by l_bid,
+        l_bv,
+        r_bid,
+        r_bv
+----
+TIP: This part of the query selects the unique bill that you want to compare with others `... and bill_id = '117hr1512' and bill_version ='ih'...`
+
+The result of the query will lok like:
+
+image::investigate/img/example_of_query_result_1.png[width=1200]
+
+, where you can see the scores of the similarity from left to right and from right to left.
+
+==== 4.2 Query to create materialized view
+
+Materialized views are stored results of the "heavy" queries, which can be used to get secondary results. Once materialized view was created and stored you may quickly fetch the rows from it as from regular table.
+
+We can create a Materialized view with the result of the similarity scores between each to each sections/bills, and update it regularly with cron.
+
+The query below can take hours to execute:
+----
+ create table section_to_section_cosine as (
+ CREATE MATERIALIZED VIEW section_to_section_cosine AS (
+select l_bid                                                as left_bill_id,
+      l_bv                                                 as left_bill_version,
+      r_bid                                                as right_bill_id,
+      r_bv                                                 as right_bill_version,
+      avg(sh)                                              as avg_sh_d,
+      max(sh)                                              as max_sh_d,
+      jsonb_array_length(jsonb_agg(lr_dist)::jsonb)        as matched_sections,
+      jsonb_agg(lr_dist)                                   as sections_score,
+      round(avg(smlar(l_w, r_w, 'N.i / N.a')::numeric), 2) as l_r_score,
+      round(avg(smlar(l_w, r_w, 'N.i / N.b'))::numeric, 2) as r_l_score,
+      l_b.length                                           as left_bill_length,
+      r_b.length                                           as right_bill_length
+from (
+        select CONCAT(greatest(l.id, r.id), '-', least(l.id, r.id)) as uid,
+               l.bill_id                                               l_bid,
+               l.bill_version                                          l_bv,
+               r.bill_id                                               r_bid,
+               r.bill_version                                          r_bv,
+               l.text_query_index_col                                  l_w,
+               r.text_query_index_col                                  r_w,
+               bit_count(r.simhash_text # l.simhash_text)           as sh,
+               json_build_object(
+                       'left_right_score',
+                       ROUND(smlar(l.text_query_index_col, r.text_query_index_col, 'N.i / N.a')::numeric, 6),
+                       'right_left_score',
+                       ROUND(smlar(r.text_query_index_col, l.text_query_index_col, 'N.i / N.a')::numeric, 6),
+                       'shd', bit_count(r.simhash_text # l.simhash_text),
+                       'left_section_id', l.id,
+                       'right_section_id', r.id,
+                       'l_len', l.length,
+                       'r_len', r.length
+                   )::jsonb                                         as lr_dist
+        from (
+                 select *
+                 from sections
+                 where parent_id is null
+             ) l
+                 join (
+            select *
+            from sections
+            where parent_id is null
+        ) r on
+            bit_count(r.simhash_text # l.simhash_text) < 10
+    ) as t
+        left join bill l_b on
+           l_b.billnumber = t.l_bid
+       and l_b."version" = l_bv
+        left join bill r_b on
+           r_b.billnumber = t.r_bid
+       and r_b."version" = r_bv
+group by l_bid,
+        l_bv,
+        r_bid,
+        r_bv,
+        l_b.length,
+        r_b.length
+order by matched_sections desc,
+        avg_sh_d,
+        max_sh_d desc,
+        l_r_score desc,
+        r_l_score desc
+ )
+
+----
 
 == How does it work?
 
@@ -57,7 +325,7 @@ Once database has all additional columns filled and indexes for them have been b
 
 The main idea here is to fetch the most relevant data with quick and "light" part of the query, and then process only those documents with the "heavy" part of the query.
 
-First, we filter all documents that are similar to the current document using SimHash (fingerprint). We can adjust the threshold to grab more documents if we want and have wider search results, that will appear on the "second page". Thus, we ignore the majority of the database in further more complex processing, e.g. those documents that will have zero or close to zero similarity scores because they will have more difference between SimHashes.
+First, we filter all documents that are similar to the current document using SimHash (fingerprint). See this part of the query listed above: `... bit_count(r.simhash_text # l.simhash_text) < 10...` . We can adjust the threshold to grab more documents if we want and have wider search results, that will appear on the "second page". Thus, we ignore the majority of the database in further more complex processing, e.g. those documents that will have zero or close to zero similarity scores because they will have more difference between SimHashes.
 
 Simhash is a locality-sensitive hashing mechanism (see documentation), that builds close or even identical hashes for similar documents. Counting bitwise XOR for bit strings is pretty fast operation, that's why it performs quickly, and it depends only on the size of DB and is independent of the texts' length.
 
