@@ -68,6 +68,11 @@ instance/
 # Scrapy stuff:
 .scrapy
 
+# config.yaml
+config.yaml
+
+.idea/
+
 # Sphinx documentation
 docs/_build/
 
@@ -127,3 +132,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# PyCharm
+.idea

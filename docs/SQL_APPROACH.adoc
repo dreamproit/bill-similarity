@@ -1,0 +1,649 @@
+:toc:
+
+
+== Current data pipeline and storage ==
+
+All meta information is stored in a database.
+But the document texts are stored in the Elasticsearch.
+The current architecture is described in the following diagram:
+https://github.com/arachnidllc/BillMap/blob/main/architecture.jpg[here]
+
+The step-by-step data pipeline is as follows:
+
+- Get the data from congress.gov.
+- Write bill ids and bill titles to a database.
+- Analyze bill meta information.
+- Analyze related bills
+- Store the documents in Elasticsearch (bill text and bill sections)
+- Analyze similarity between bills
+- Get newly loaded bills from databsase
+- Compare bills using https://github.com/aih/bills[bills] GO package
+* For each bill, get the documents from Elasticsearch using MLT (More Like This) query
+- Store the results in a database
+
+= Pure SQL based approach to find similar documents =
+
+== SQL-based similarity pipeline summary ==
+
+Similarity is calculated in a 4-step process:
+
+* Build a matrix of a full union of all documents to all documents
+
+* Apply pre-filter by trigram similarity (each trigram consists of 3 chars)
+
+* Apply post-filter by trigram similarity (each trigram consists of  [8->1] words build as ts_query)
+
+* Calculate the normalized score (0-1) of each found pair of documents from left to right and from right to left
+
+== SQL-based approach performance analysis
+
+The whole query with comments is stored in https://docs.google.com/spreadsheets/d/1-VYuSP9_2-dkRCVffQX9rpJp5jELUL6DiACZ2RKIMYk/edit?usp=sharing[google sheet]. It's also exported as pdf files and located in the `/docs` folder.
+
+link:Pairwise-Comparison-Explanation-Titles-Statistic-Performance.pdf[Performance Analysis]
+
+This image shows dependency of text length and the speed of the query.
+
+image::image-2022-04-28-20-06-02-300.png[width=640]
+
+Here's the text length distribution among the bills.
+
+image::bills-analysis.png[Bills length analysis, width=640]
+
+You can see that this approach depends on the text length.
+
+We have found a way to improve the performance of the query using <<Sim-Hash approach>>. Basically it will make search for similar documents operation complexity linear, and it will depend only on documents count, not depending on the text length.
+
+
+== Indexes for Similarity ==
+
+The main trick here is to build correct indexes.
+
+Having indexes sorted in right direction and built with correct mechanisms and tools we can use them as if all data (as a mapp of ID and vectorised ngrams and other additional info) is loaded in memory.
+
+We can use 2 types of indexes:
+
+=== GIN ===
+
+https://www.postgresql.org/docs/current/indexes-types.html#INDEXES-TYPES-GIN[`GIN`] - which is a common practice for full text search
+
+=== GIST ===
+https://www.postgresql.org/docs/current/indexes-types.html#INDEXES-TYPE-GIST[`GIST`] - another one index type frequently used to store structured information as well as full text search
+
+=== Composing BTREE + GIN ===
+To be able to make composite indexes of full-text search data and usual data types (INT, STRING, etc.) we need to install additional extension https://www.postgresql.org/docs/14/btree-gin.html[btree_gin].
+
+[source,sql]
+----
+CREATE EXTENSION btree_gin;
+----
+
+This command creates an index consisting of title `id`, `title` as `gin_trgm_ops` (trigrams) and `title` as tsvector (vectorized representations of the title):
+
+[source,sql]
+----
+CREATE INDEX id_title_trgm_title_ts_idx ON btiapp_billstagetitle
+    USING GIN (id, title gin_trgm_ops, to_tsvector('english', title));
+----
+
+=== Composing BTREE + GIST ===
+
+To mix GIST index with BTREE we are using https://www.postgresql.org/docs/14/btree-gist.html[btree_gist] extension.
+
+[source,sql]
+----
+CREATE EXTENSION btree_gist;
+----
+
+[source,sql]
+----
+CREATE INDEX id_title_gist_title_ts_idx ON btiapp_billstagetitle
+    USING GIST (id, title gist_trgm_ops, to_tsvector('english', title));
+----
+
+
+=== Calculate n-grams
+
+To generate n-grams we can use the `nltk` Python package. To do that, we would calculate n-grams before loading into the DB. As an alternative, the n-gram can be calculated in pure SQL, with word normalisation, without stop words, etc.:
+
+[source,sql]
+----
+/*
+ * Calculate n-grams with needed length for a given text.
+ * @param land - language to use to generate n-grams efficiently
+ * @param text - text to calculate n-grams for
+ * @param n - n-gram length
+ * @returns - n-grams as tsquery
+*/
+CREATE OR REPLACE FUNCTION phrase_ngram(lng regconfig, t text, n int)
+    RETURNS tsquery
+    LANGUAGE plpgsql
+    IMMUTABLE AS
+$$
+DECLARE
+    words  text[];
+    i      integer;
+    result tsquery;
+    q      tsquery;
+BEGIN
+    /* split the string into an array of words */
+    words := regexp_split_to_array(lower($2), '[^[:alnum:]]+');
+    for i in 1 .. cardinality(words) - n + 1
+        LOOP
+        /* a phrase consisting of n consecutive words */
+        q := phraseto_tsquery($1, array_to_string(words[i : i + n - 1], ' '));
+        IF result IS NULL THEN
+            result := q;
+        ELSE
+            /* append with "or" */
+            result := result || q;
+        END IF;
+    END LOOP;
+    /*
+    ToDo: Select only unique n-grams from generated tsquery
+    */
+    RETURN result;
+END;
+$$;
+----
+
+This function splits the text into words and generates n-grams.
+To test it you can run this command to generate 4-gram:
+
+[source,sql]
+-----
+SELECT phrase_ngram('english', 'To extend the registration and reporting requirements of the Federal securities laws to certain housing-related Government-sponsored enterprises, and for other purposes. ', 4);
+-----
+
+Result:
+
+[source]
+----
+'extend' <2> 'registr' | 'extend' <2> 'registr' | 'registr' <2> 'report' | 'registr' <2> 'report' <-> 'requir' | 'report' <-> 'requir' | 'report' <-> 'requir' | 'requir' <3> 'feder' | 'feder' <-> 'secur' | 'feder' <-> 'secur' <-> 'law' | 'feder' <-> 'secur' <-> 'law' | 'secur' <-> 'law' <2> 'certain' | 'law' <2> 'certain' <-> 'hous' | 'certain' <-> 'hous' <-> 'relat' | 'certain' <-> 'hous' <-> 'relat' <-> 'govern' | 'hous' <-> 'relat' <-> 'govern' <-> 'sponsor' | 'relat' <-> 'govern' <-> 'sponsor' <-> 'enterpris' | 'govern' <-> 'sponsor' <-> 'enterpris' | 'sponsor' <-> 'enterpris' | 'enterpris' | 'purpos' | 'purpos'
+----
+
+Where:
+
+* n-grams are separated by the `&nbsp;|&nbsp;` symbol (logical `OR` operator)
+* words are normalised
+* `<n>`  - how many words were between words before https://en.wikipedia.org/wiki/Stemming[stemming]
+* < - > means that words should be linked (actually means that it's n-gram)
+* it's standard PostgreSQL full text search query mechanism and it is described here: https://www.postgresql.org/docs/9.6/static/textsearch-controls.html[here]
+
+
+== Query Indexes ==
+
+We need these fields to be stored in the indexes:
+
+* `id` title ID
+* `title` split in 3-gram (`gin_trgm_ops` OR `gist_trgm_ops`)
+* `title_ngram` split in 4-gram (`gin_trgm_ops` OR `gist_trgm_ops`)
+
+
+to speed up this part of query:
+
+[source,sql,postgresql]
+----
+from left_titles lt, right_titles rt
+/*
+Requires composite index for fields:
+id, title gin_trgm, to_tsvector(title)
+*/
+WHERE true
+    /* No need to check. Score always eqals 1 for same doccuments */
+    and lt.id <> rt.id
+    /* Possibly might decrease calculation time:
+    and lt.id > rt.id
+    */
+    /* Filter by trigrams hash firstly */
+    and lt.title % rt.title
+    /* If trigram hash comparison returns values greater than 0.5,
+    then do full text search:
+    from left to right and vice versa.
+    TODO: investigate if we can decrease the number of rows to be processed.
+    */
+    and (
+        to_tsvector(rt.title) @@ lt.title_n_grams::tsquery
+        or to_tsvector(lt.title) @@ rt.title_n_grams::tsquery
+    )
+----
+
+This calculates the cartesian product of all titles filtered in 2 stages. It might be useful to apply one more additional filter, trigrams and full text search.
+
+Where:
+
+* 1st stage:
+
+[source,sql]
+----
+lt.title % rt.title
+----
+
+Under the hood, the PostgreSQL operator `%` is a bitwise operator.
+It checks the similarity of n-grams with threshold 0.3 (threshold can be changed easily)
+
+* 1.a `possible` stage to filter more precisely (not tested well yet by me, but IMO it should help):
+
+[source,sql]
+----
+(
+       lt.title %>> rt.title
+    or rt.title %>> lt.title
+)
+----
+
+* 2nd stage will be executed only if the first has passed successfully and returned `TRUE` checks for trigrams hash equality using full text search.
+
+[source,sql]
+----
+and (
+       to_tsvector(rt.title) @@ lt.title_n_grams::tsquery
+    or to_tsvector(lt.title) @@ rt.title_n_grams::tsquery
+)
+----
+
+The next stage is to calculate the score of the match.
+
+This is achieved by calculating the number of intersected n-grams between texts, divided by the number of n-grams in each of the texts we compare. The resulting score is between 0-1, because the numerator is, at most, equal to the total number of n-grams in the smallest of the documents.
+
+[source,math]
+----
+left_to_right_score = len(n_grams_intersection) / len(left_n_grams)
+
+right_to_left_score = len(n_grams_intersection) / len(right_n_grams)
+----
+
+In this approach to calculate ranks (score) we are using the following piece of code:
+
+[source,sql]
+-------
+ts_rank_cd(
+        to_tsvector('english', rt),
+        to_tsquery('english', lt_n_g),
+        32
+    )          AS ltr_rank,
+ts_rank_cd(
+    to_tsvector('english', lt),
+    to_tsquery('english', rt_n_g),
+    32
+)              AS rtl_rank
+-------
+
+The `ts_rank_cd` Postgres FTS function calculates the rank (score) of found text against query. It has this notation:
+
+[source,pseudocode]
+----
+ts_rank_cd([ weights float4[], ] vector tsvector, query tsquery [, normalization integer ]) returns float4
+----
+
+Where:
+
+* `weights` is an array of weights for each token in the query
+* `vector` is a vector of tokens in the document
+* `query` is a query vector
+* `normalization` is an integer that specifies the normalization method
+
+Possible values of normalization are:
+
+* 0 (the default) ignores the document length
+* 1 divides the rank by 1 + the logarithm of the document length
+* 2 divides the rank by the document length
+* 4 divides the rank by the mean harmonic distance between extents (this is implemented only by ts_rank_cd)
+* 8 divides the rank by the number of unique words in document
+* 16 divides the rank by 1 + the logarithm of the number of unique words in document
+* 32 divides the rank by itself + 1
+
+If more than one flag bit is specified, the transformations are applied in the order listed.
+
+How to configure rank calculation is described https://www.postgresql.org/docs/9.6/static/textsearch-controls.html[here].
+
+== SQL Query ==
+
+=== How to run it ===
+Before running all commands please read it carefully with all comments and explanations. There are some settings which you should be aware of.
+
+Most likely you will need to set limit/offset in order to limit the number of rows to compare in these lines:
+
+[source,sql]
+----
+limit_num as (
+    /*
+    Limit the number of rows to be processed.
+    */
+    select 100 as n
+    /* To process all rows uncomment the following line
+    select (select count(*) from btiapp_billstagetitle) as n
+    */
+),
+offset_num as (select 0 as n),
+----
+
+=== Query ===
+Here is the code needed to be executed in the psql console (command by command):
+
+[source,sql]
+----
+/*
+Needed extensions
+*/
+/*
+https://www.postgresql.org/docs/current/pgprewarm.html
+*/
+CREATE EXTENSION pg_prewarm;
+/*
+https://www.postgresql.org/docs/9.0/pgtrgm.html
+*/
+CREATE EXTENSION pg_trgm;
+/*
+https://www.postgresql.org/docs/current/btree-gin.html
+*/
+CREATE EXTENSION btree_gin;
+
+/*
+Postgresql settigns tweaks
+*/
+/* should be sst to value of 1/2 of total RAM memory */
+SET effective_cache_size = '14 GB';
+
+/*
+https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-WORK-MEM
+Not sure about this setting, but it also might be useful
+*/
+show work_mem;
+/* Uncomment next line to change work_mem to 100MB */
+-- set work_mem = '100MB';
+/*
+https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-WORK-MEM
+*/
+show hash_mem_multiplier;
+set hash_mem_multiplier = 2.0;
+
+/*
+Utility function to generate n-grams from a string.
+Returns tsquery string with n-grams.
+*/
+CREATE OR REPLACE FUNCTION phrase_ngram(lng regconfig, t text, n int)
+    RETURNS tsquery
+    LANGUAGE plpgsql
+    IMMUTABLE AS
+$$
+DECLARE
+    words  text[];
+    i      integer;
+    result tsquery;
+    q      tsquery;
+BEGIN
+    /* split the string into an array of words */
+    words := regexp_split_to_array(lower($2), '[^[:alnum:]]+');
+    for i in 1 .. cardinality(words) - n + 1
+        LOOP
+        /* a phrase consisting of n consecutive words */
+        q := phraseto_tsquery($1, array_to_string(words[i : i + n - 1], ' '));
+        IF result IS NULL THEN
+            result := q;
+        ELSE
+            /* append with "or" */
+            result := result || q;
+        END IF;
+    END LOOP;
+    /*
+    ToDo: Select only unique n-grams from generated tsquery
+    */
+    RETURN result;
+END;
+$$;
+
+/* Add fields to billstagetitle table */
+alter table btiapp_billstagetitle
+add column title_n_grams text;
+
+/*
+Populate billstagetitle.title_n_grams field with generated n-grams.
+NOTE: it will try to generate up to 8-grams.
+If value for 8-gram is empty it will try to
+generate n-grams for n from 8 down to 1.
+*/
+update btiapp_billstagetitle
+set title_n_grams=COALESCE(
+    phrase_ngram('english'::regconfig, title, 8),
+    phrase_ngram('english'::regconfig, title, 7),
+    phrase_ngram('english'::regconfig, title, 6),
+    phrase_ngram('english'::regconfig, title, 5),
+    phrase_ngram('english'::regconfig, title, 4),
+    phrase_ngram('english'::regconfig, title, 3),
+    phrase_ngram('english'::regconfig, title, 2),
+    phrase_ngram('english'::regconfig, title, 1)
+)
+where true;
+
+
+/*
+Indexes
+*/
+/* n-gram length index */
+CREATE INDEX title_ngram_length_idx
+    on btiapp_billstagetitle (
+        cardinality(
+        regexp_split_to_array(
+        title_n_grams, '\|'
+        )
+    ) desc
+);
+/* composite index  id, title gin_trgm_ops, to_tsvector('english', title) */
+CREATE INDEX id_title_trgm_title_ts_idx ON btiapp_billstagetitle
+    USING GIN (id, title gin_trgm_ops, to_tsvector('english', title));
+
+
+/*
+FIND SIMILAR TITLES
+and store them in a materialized view
+*/
+-- CREATE MATERIALIZED VIEW stage_title_compared_mv AS
+WITH
+/*
+Load data to the PG cache to warm up the index.
+*/
+    warm_up as (
+        select (
+            (select pg_prewarm('btiapp_billstagetitle')) +
+            (select pg_prewarm('title_ngram_length_idx')) +
+            (select pg_prewarm('id_title_trgm_title_ts_idx'))
+        ) as pre_warmed_blocks
+    ),
+    limit_num as (
+        /*
+        Limit the number of rows to be processed.
+        */
+        select 100 as n
+        /* To process all rows uncomment the following line
+        select (select count(*) from btiapp_billstagetitle) as n
+        */
+    ),
+    offset_num as (select 0 as n),
+    left_titles AS (
+        SELECT id,
+        bill_basic_id,
+        title,
+        title_word_ngrams,
+        title_ngrams_length,
+        title_n_grams
+        FROM btiapp_billstagetitle
+        /* To play with specific bill id uncomment the following line
+        where id = '{bill_id}'
+        */
+
+        /* Uses the index title_ngram_length_idx */
+        order by cardinality(regexp_split_to_array(title_n_grams, '\|')) desc
+        limit (select n from limit_num) offset (select n from offset_num)
+    ),
+    right_titles AS (
+        SELECT id, bill_basic_id, title, title_word_ngrams, title_n_grams, title_ngrams_length
+        FROM btiapp_billstagetitle
+    ),
+    p as (
+        select
+            lt.id                                                      as lt_id,
+            rt.id                                                      as rt_id,
+            lt.bill_basic_id                                           as lb_id,
+            rt.bill_basic_id                                           as rb_id,
+            lt.title                                                   as lt,
+            rt.title                                                   as rt,
+            lt.title_n_grams                                           as lt_n_g,
+            rt.title_n_grams                                           as rt_n_g,
+            concat(GREATEST(lt.id, rt.id), '<->', LEAST(lt.id, rt.id)) as uid
+        from left_titles lt, right_titles rt
+        /*
+        Requires composite index for fields:
+        id, title gin_trgm, to_tsvector(title)
+        */
+        WHERE true
+            and lt.id <> rt.id
+            /* Possibly might decrease calculation time:
+            and lt.id > rt.id
+            */
+            /* Filter by trigrams hash firstly */
+            and lt.title % rt.title
+            /* If trigram hash comparison returns values greater than 0.5,
+            then do full text search:
+            from left to right and vice versa.
+            TODO: investigate if we can decrease the number of rows to be processed.
+            */
+            and (
+                to_tsvector(rt.title) @@ lt.title_n_grams::tsquery
+                or to_tsvector(lt.title) @@ rt.title_n_grams::tsquery
+            )
+    )
+select
+    (select pre_warmed_blocks from warm_up),
+    uid,
+    lt_id,
+    rt_id,
+    /*
+    https://www.postgresql.org/docs/current/textsearch-controls.html#TEXTSEARCH-RANKING
+    */
+    ts_rank_cd(
+        to_tsvector('english', rt),
+        to_tsquery('english', lt_n_g),
+        32
+    )              AS ltr_rank,
+    ts_rank_cd(
+        to_tsvector('english', lt),
+        to_tsquery('english', rt_n_g),
+        32
+    )              AS rtl_rank,
+    /*
+    https://www.postgresql.org/docs/9.0/pgtrgm.html
+    */
+    similarity(lt, rt) AS similarity_score
+from p
+order by ltr_rank desc, rtl_rank desc, similarity_score desc;
+
+
+/*
+To get title with highlighted similarities
+*/
+WITH comp as (
+    select *
+        from stage_title_compared_mv
+        /* Just an example */
+        where
+        similarity_score > 0.8
+    order by similarity_score limit 1
+    )
+select comp.uid,
+    comp.ltr_rank,
+    comp.rtl_rank,
+    comp.similarity_score,
+    lt.title,
+    rt.title,
+    ts_headline(
+        'english', lt.title,
+        to_tsquery('english', rt.title_n_grams)
+        , 'HighlightAll=true'
+    ) as lt_headline,
+    ts_headline(
+        'english', rt.title,
+        to_tsquery('english', lt.title_n_grams)
+        , 'HighlightAll=true'
+    ) as rt
+from comp
+join btiapp_billstagetitle lt on lt.id = comp.lt_id
+join btiapp_billstagetitle rt on rt.id = comp.rt_id;
+
+
+/*
+To check the percentage of similarity all to all
+*/
+select total_rows,
+    left_cnt,
+    right_cnt,
+    left_cnt * right_cnt as total_pairs,
+    CONCAT(ROUND((total_rows::numeric / (left_cnt * right_cnt)) * 100, 2), '%') as total_pairs_percentage
+from (
+    select (select count(*) from stage_title_compared_mv) as total_rows,
+    (select count(*)
+    from (select count(rt_id) from stage_title_compared_mv group by rt_id) t
+    ) left_cnt,
+    (select count(*)
+    from (select count(lt_id) from stage_title_compared_mv group by lt_id) t
+    ) as right_cnt
+) t;
+----
+
+== Sim-Hash approach ==
+=== Summary ===
+Calculation of similarity hashes is widely used by Google and other search engines to compare any type of information (text, images, sounds, etc.)
+
+The SimHash algorithm is a locality-sensitive hashing algorithm. Locality-sensitive means that instead of the algorithm being sensitive to variations in the input stream like a cryptographic hashing algorithm, it ignores variations (to a degree) and groups similar content together. Similar input strings will get similar or even the same hashes.
+
+SimHash works by breaking the input string into k-grams and producing a fixed-sized shingle for each k-gram. This algorithm under the hood convert every k-gram to integer with simple arithmetic and bit operations and has an integer number as a result. It works pretty fast in terms of machine operations.
+
+=== Comparison ===
+
+SimHash values can be compared as integer numbers or as binary numbers to determine similarity. XOR operation between two binary numbers will result in a string, which has 0 when bits are equal and 1 if bits differs. Counting 1s in bit string we get a Hamming distance.
+
+==== Hamming distance ====
+The Hamming Distance just  identifies the number of bits that differ between the binary representations of two hashes. This operation also can perform very fast on the DB side.
+
+For now, we have 64-bit long hashes and we assume that the hamming distance between two similar texts should be not more than 6 (it's configurable value).
+
+This means the two SimHash values are only 9% different (6/64=0.09375), or 91% similar. Therefore, the lower the Hamming Distance, the more similar the files.
+
+=== Additional info ===
+==== Brief ====
+Documentation about sim hashes can be found http://benwhitmore.altervista.org/simhash-and-solving-the-hamming-distance-problem-explained/?doing_wp_cron=1651079464.6894569396972656250000[here].
+
+===== Full =====
+Explanation of sim-hash algorithm is located https://education.dellemc.com/content/dam/dell-emc/documents/en-us/2014KS_Roth-Find_Similar_Documents_Without_Using_a_Full_Text_Index.pdf[here].
+
+=== Usage ===
+It's possible to combine sim-hash and full text search. This approach is in development in other branch. Basic idea is to calculate sim hash for each bill before loading it to the DB, store sim hash in separate column and then use it to find similar bills.
+
+To compare bills (ltr, rtl) and to set score we'll use PostgreSql full text search functionality.
+
+== Possible Improvements of pure SQL approach ==
+[upperroman]
+. *Combine sim hash algorithm with full text search.*
+. Think about length of n-grams. Now I'm trying to create 8-gram. If ngram was not generated it will generate smaller one and down to 1-gram.
+that's because titles can be small. For bills, we won't need 1-gram for sure.
+. Create partial indexes to speed up queries.
+. Rework the query to allow Postgres Query planner running it in parallel.
+
+== Useful links ==
+* http://benwhitmore.altervista.org/simhash-and-solving-the-hamming-distance-problem-explained/?doing_wp_cron=1651079464.6894569396972656250000
+
+* https://education.dellemc.com/content/dam/dell-emc/documents/en-us/2014KS_Roth-Find_Similar_Documents_Without_Using_a_Full_Text_Index.pdf
+
+* https://ismailyenigul.medium.com/pg-prewarm-extention-to-pre-warming-the-buffer-cache-in-postgresql-7e033b9a386d
+* https://www.postgresql.org/docs/9.0/pgtrgm.html
+
+* https://stackoverflow.com/questions/53600144/how-to-migrate-an-existing-postgres-table-to-partitioned-table-as-transparently
+
+* https://www.alibabacloud.com/blog/optimizations-with-full-text-search-in-postgresql_595339
+
+* https://www.postgresql.org/docs/14/textsearch-controls.html#TEXTSEARCH-RANKING
+
+* https://www.postgresql.org/docs/current/using-explain.html
+
+* https://www.postgresql.org/docs/current/parallel-query.html
+
+* https://wiki.postgresql.org/wiki/FAQ#What_is_the_maximum_size_for_a_row.2C_a_table.2C_and_a_database.3F
