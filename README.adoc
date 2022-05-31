@@ -37,6 +37,7 @@ CAUTION:  need superuser access to DB
 ==== 1.1. Install `smlar` plugin
 * clone `https://github.com/jirutka/smlar`
 * from the smlar folder run commands:
+
 `$ USE_PGXS=1 make`
 
 `$ USE_PGXS=1 make install`
@@ -45,8 +46,8 @@ CAUTION:  need superuser access to DB
 * enter postgres command line:
 run `psql`
 
-* connect to your database : `\c bills`.
-_bills_ - is a database name.
+* connect to your database with postgres command line: `\c bills`.
+_bills_ - is a database name, specify your database name here.
 
 * create extension with command:
 `CREATE EXTENSION smlar`
@@ -133,10 +134,10 @@ View detailed steps and commands:
 
 ==== 3.1 Add required column:
 ----
-alter table sections alter column text_query_index_col type text[]
+alter table sections add column text_query_index_col type text[]
   using text_query_index_col::text[];
 ----
-==== 3.2. Populate column with data
+==== 3.2. Populate column with generated data (n-grams)
 ----
 update
   sections
@@ -238,7 +239,7 @@ group by l_bid,
 ----
 TIP: This part of the query selects the unique bill that you want to compare with others `... and bill_id = '117hr1512' and bill_version ='ih'...`
 
-The result of the query will lok like:
+The result of the query will look like:
 
 image::investigate/img/example_of_query_result_1.png[width=1200]
 
@@ -248,9 +249,9 @@ image::investigate/img/example_of_query_result_1.png[width=1200]
 
 Materialized views are stored results of the "heavy" queries, which can be used to get secondary results. Once materialized view was created and stored you may quickly fetch the rows from it as from regular table.
 
-We can create a Materialized view with the result of the similarity scores between each to each sections/bills, and update it regularly with cron.
+We can create a Materialized view with the result of the similarity scores between each to each sections/bills. Then we should refresh it regularly, because it only stores the result of "heavy" query, it is not dynamically or automatically updated table.
 
-The query below can take hours to execute:
+The query below can take hours to execute, it counts all to all scores between several hundred thousand texts:
 ----
  create table section_to_section_cosine as (
  CREATE MATERIALIZED VIEW section_to_section_cosine AS (
