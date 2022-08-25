@@ -1,0 +1,10 @@
+CONGRESS_ROOT_FOLDER: '/programm/congress.nosync/data'
+DB_connection:
+  connector: 'postgresql+psycopg2'
+  host: '127.0.0.1:5432'                # default postgresql host:port
+  db_name: 'bills'
+  bills_table_name: 'xml_bills'
+  sections_table_name: 'sections'
+  bill_path_table_name: 'bill_path'
+  user: ''          # insert your credentials here
+  password: ''      # insert your credentials here
